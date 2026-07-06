@@ -488,3 +488,60 @@ fn r_reloads_and_picks_up_new_commits() {
     assert_eq!(app.total_len(), 5);
     assert!(app.status.contains("reloaded"));
 }
+
+#[test]
+fn reload_resets_the_whole_search_state() {
+    let (_f, mut app) = linear_app(5, 300);
+    app.handle_key(ch('/'));
+    for c in "commit".chars() {
+        app.handle_key(ch(c));
+    }
+    app.handle_key(key(KeyCode::Enter));
+    assert!(!app.search.matches.is_empty());
+    app.handle_key(ch('r'));
+    assert!(app.search.query.is_empty(), "reload must clear the query");
+    assert!(app.search.matches.is_empty());
+    app.handle_key(ch('n'));
+    assert!(
+        app.status.contains('/'),
+        "n after reload hints to start a new search"
+    );
+}
+
+#[test]
+fn esc_cancels_a_previously_confirmed_search_too() {
+    let (_f, mut app) = linear_app(5, 300);
+    app.handle_key(ch('/'));
+    for c in "commit".chars() {
+        app.handle_key(ch(c));
+    }
+    app.handle_key(key(KeyCode::Enter));
+    app.handle_key(ch('/'));
+    app.handle_key(key(KeyCode::Esc));
+    assert!(app.search.query.is_empty(), "esc kills the search entirely");
+    app.handle_key(ch('n'));
+    assert!(app.status.contains('/'));
+}
+
+#[test]
+fn confirming_an_empty_query_matches_nothing() {
+    let (_f, mut app) = linear_app(3, 300);
+    app.handle_key(ch('/'));
+    app.handle_key(key(KeyCode::Enter));
+    assert!(app.search.matches.is_empty());
+    assert!(app.status.contains("0 match"));
+}
+
+#[test]
+fn zero_chunk_size_still_terminates() {
+    let (_f, mut app) = linear_app(4, 300);
+    app.chunk_size = 0;
+    app.reload().unwrap();
+    assert!(
+        !app.commits.is_empty(),
+        "clamped step must load at least one commit"
+    );
+    app.handle_key(ch('G'));
+    assert!(app.all_loaded());
+    assert_eq!(app.selected, app.display_len() - 1);
+}

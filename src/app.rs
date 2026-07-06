@@ -134,6 +134,8 @@ impl App {
         self.engine.reset();
         self.uncommitted = self.repo.worktree_status().unwrap_or_default();
         self.detail_cache.clear();
+        self.search.input.clear();
+        self.search.query.clear();
         self.search.matches.clear();
         self.load_next_chunk()?;
         self.selected = self.selected.min(self.display_len().saturating_sub(1));
@@ -171,7 +173,7 @@ impl App {
             return Ok(());
         }
         let start = self.commits.len();
-        let end = (start + self.chunk_size).min(self.oids.len());
+        let end = (start + self.chunk_size.max(1)).min(self.oids.len());
         let chunk = self.repo.load_commits(&self.oids[start..end])?;
         self.rows.extend(self.engine.process(&chunk));
         self.commits.extend(chunk);
@@ -339,6 +341,10 @@ impl App {
 
     /// Rebuild the match list for `q` over the loaded commits.
     fn recompute_matches(&mut self, q: &str) {
+        if q.is_empty() {
+            self.search.matches.clear();
+            return;
+        }
         let off = self.uncommitted_offset();
         self.search.matches = self
             .commits
@@ -353,6 +359,7 @@ impl App {
         match key.code {
             KeyCode::Esc => {
                 self.search.input.clear();
+                self.search.query.clear();
                 self.search.matches.clear();
                 self.mode = Mode::Normal;
             }
