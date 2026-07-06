@@ -281,3 +281,100 @@ fn diff_works_for_uncommitted_files() {
             .any(|l| l.origin == '+' && l.content == "new")
     );
 }
+
+#[test]
+fn slash_enters_search_and_typing_jumps_to_the_nearest_match() {
+    let (_f, mut app) = linear_app(10, 300);
+    app.handle_key(ch('/'));
+    assert_eq!(app.mode, Mode::Search);
+    for c in "commit 3".chars() {
+        app.handle_key(ch(c));
+    }
+    // topo order: newest first → "commit 3" is display row 6
+    assert_eq!(app.selected, 6);
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.mode, Mode::Normal);
+    assert_eq!(app.search.query, "commit 3");
+    assert!(app.status.contains("1 match"));
+}
+
+#[test]
+fn search_is_case_insensitive_and_finds_hash_prefixes() {
+    let (_f, mut app) = linear_app(3, 300);
+    app.handle_key(ch('/'));
+    for c in "COMMIT 1".chars() {
+        app.handle_key(ch(c));
+    }
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.search.matches.len(), 1);
+
+    let hash7 = app.commits[0].short_id.clone();
+    app.handle_key(ch('/'));
+    for c in hash7.chars() {
+        app.handle_key(ch(c));
+    }
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.selected, 0);
+    assert_eq!(app.search.matches.len(), 1);
+}
+
+#[test]
+fn esc_cancels_the_search_input() {
+    let (_f, mut app) = linear_app(3, 300);
+    app.handle_key(ch('/'));
+    app.handle_key(ch('x'));
+    app.handle_key(key(KeyCode::Esc));
+    assert_eq!(app.mode, Mode::Normal);
+    assert!(app.search.input.is_empty());
+    assert!(app.search.matches.is_empty());
+}
+
+#[test]
+fn n_wraps_around_when_everything_is_loaded() {
+    let (_f, mut app) = linear_app(5, 300);
+    app.handle_key(ch('/'));
+    for c in "commit".chars() {
+        app.handle_key(ch(c));
+    }
+    app.handle_key(key(KeyCode::Enter)); // matches all 5 rows
+    assert_eq!(app.selected, 0);
+    app.handle_key(ch('n'));
+    assert_eq!(app.selected, 1);
+    app.handle_key(ch('N'));
+    assert_eq!(app.selected, 0);
+    for _ in 0..4 {
+        app.handle_key(ch('n'));
+    }
+    assert_eq!(app.selected, 4);
+    app.handle_key(ch('n')); // wrap
+    assert_eq!(app.selected, 0);
+}
+
+#[test]
+fn n_auto_loads_further_chunks_until_it_finds_a_match() {
+    let (_f, mut app) = linear_app(10, 3);
+    app.reload().unwrap();
+    assert_eq!(app.commits.len(), 3); // only "commit 9..7" loaded
+    app.handle_key(ch('/'));
+    for c in "commit 0".chars() {
+        app.handle_key(ch(c));
+    }
+    app.handle_key(key(KeyCode::Enter));
+    assert!(
+        app.search.matches.is_empty(),
+        "oldest commit not loaded yet"
+    );
+    app.handle_key(ch('n'));
+    assert_eq!(
+        app.selected, 9,
+        "auto-loaded chunks until the match appeared"
+    );
+    assert!(app.all_loaded());
+}
+
+#[test]
+fn n_without_a_confirmed_query_sets_a_hint_status() {
+    let (_f, mut app) = linear_app(3, 300);
+    app.handle_key(ch('n'));
+    assert!(app.status.contains('/'));
+}

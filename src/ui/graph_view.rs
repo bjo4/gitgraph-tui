@@ -89,7 +89,12 @@ fn row_line(app: &App, i: usize, graph_w: usize, text_w: usize) -> Line<'static>
     }
     let summary = truncate_width(&commit.summary, left.saturating_sub(1));
     let pad = left.saturating_sub(summary.width());
-    spans.push(Span::raw(summary));
+    let sum_style = if app.search.matches.contains(&i) {
+        Style::new().add_modifier(Modifier::UNDERLINED)
+    } else {
+        Style::new()
+    };
+    spans.push(Span::styled(summary, sum_style));
     spans.push(Span::raw(" ".repeat(pad)));
     let dim = Style::new().fg(Color::DarkGray);
     spans.push(Span::styled(

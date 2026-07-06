@@ -180,6 +180,24 @@ fn detail_panel_for_uncommitted_row() {
 }
 
 #[test]
+fn search_mode_shows_the_live_input_in_the_help_line() {
+    let f = merge_fixture();
+    let mut app = app_of(&f);
+    app.handle_key(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Char('/'),
+        crossterm::event::KeyModifiers::NONE,
+    ));
+    for c in "feat".chars() {
+        app.handle_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char(c),
+            crossterm::event::KeyModifiers::NONE,
+        ));
+    }
+    let lines = render_app(&mut app, 80, 12);
+    assert!(lines.last().unwrap().contains("/feat"));
+}
+
+#[test]
 fn diff_view_renders_colored_lines_full_screen() {
     let f = Fixture::new();
     let c1 = f.commit("base", &[("a.txt", "one\n")], &[], &[], 1_000);
