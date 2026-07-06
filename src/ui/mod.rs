@@ -1,10 +1,14 @@
+pub mod graph_view;
 pub mod util;
 
 use ratatui::Frame;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::Line;
+use ratatui::widgets::Block;
 
 use crate::app::App;
+use crate::app::Mode;
 use crate::git::types::RefKind;
 use crate::graph::layout::PALETTE_SIZE;
 
@@ -35,13 +39,34 @@ pub fn ref_style(kind: RefKind) -> Style {
     }
 }
 
-/// Top-level draw. Fleshed out in the graph/detail/diff view tasks.
+/// Top-level draw: graph (70%) / detail (30%) / one help line.
 pub fn render(frame: &mut Frame, app: &mut App) {
-    let title = format!(
-        " {} — {}/{} commits",
-        app.repo_name,
-        app.display_len(),
-        app.total_len()
-    );
-    frame.render_widget(Line::from(title), frame.area());
+    let [main_area, detail_area, help_area] = Layout::vertical([
+        Constraint::Percentage(70),
+        Constraint::Percentage(30),
+        Constraint::Length(1),
+    ])
+    .areas(frame.area());
+    graph_view::render(frame, main_area, app);
+    render_detail_placeholder(frame, detail_area);
+    render_help(frame, help_area, app);
+}
+
+/// Replaced by detail_view in the next task.
+fn render_detail_placeholder(frame: &mut Frame, area: Rect) {
+    frame.render_widget(Block::bordered().title(" commit "), area);
+}
+
+fn render_help(frame: &mut Frame, area: Rect, app: &App) {
+    let text = match app.mode {
+        Mode::Search => format!(" /{}▌  enter:confirm  esc:cancel", app.search.input),
+        Mode::Diff => " j/k:scroll  g/G:top/bottom  esc:back".to_string(),
+        Mode::BranchFilter => " j/k:choose  enter:apply  esc:close".to_string(),
+        Mode::Normal if !app.status.is_empty() => format!(" {}", app.status),
+        Mode::Normal => {
+            " j/k:move g/G:top/bot tab:focus enter:diff /:search n/N:next b:branches r:reload q:quit"
+                .to_string()
+        }
+    };
+    frame.render_widget(Line::from(text.dim()), area);
 }
