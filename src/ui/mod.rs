@@ -1,7 +1,10 @@
 pub mod util;
 
+use ratatui::Frame;
 use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::Line;
 
+use crate::app::App;
 use crate::git::types::RefKind;
 use crate::graph::layout::PALETTE_SIZE;
 
@@ -30,4 +33,15 @@ pub fn ref_style(kind: RefKind) -> Style {
         RefKind::RemoteBranch => Style::new().fg(Color::Blue),
         RefKind::Tag => Style::new().fg(Color::Yellow),
     }
+}
+
+/// Top-level draw. Fleshed out in the graph/detail/diff view tasks.
+pub fn render(frame: &mut Frame, app: &mut App) {
+    let title = format!(
+        " {} — {}/{} commits",
+        app.repo_name,
+        app.display_len(),
+        app.total_len()
+    );
+    frame.render_widget(Line::from(title), frame.area());
 }
