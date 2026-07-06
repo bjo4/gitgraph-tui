@@ -202,3 +202,82 @@ fn moving_the_commit_cursor_resets_file_focus_state() {
     app.handle_key(ch('j')); // commit cursor
     assert_eq!(app.file_selected, 0);
 }
+
+use gitgraph_tui::app::Mode;
+
+#[test]
+fn enter_on_a_file_opens_the_diff_and_esc_closes_it() {
+    let f = Fixture::new();
+    let c1 = f.commit("base", &[("a.txt", "one\n")], &[], &[], 1_000);
+    let c2 = f.commit("edit", &[("a.txt", "one\ntwo\n")], &[], &[c1], 2_000);
+    f.branch("main", c2);
+    f.set_head("refs/heads/main");
+    let repo = GitRepo::discover(f.path()).unwrap();
+    let mut app = App::new_at(repo, 10_000).unwrap();
+    app.handle_key(key(KeyCode::Tab)); // focus files
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.mode, Mode::Diff);
+    let diff = app.diff.as_ref().unwrap();
+    assert_eq!(diff.title, "a.txt");
+    assert!(
+        diff.lines
+            .iter()
+            .any(|l| l.origin == '+' && l.content == "two")
+    );
+    app.handle_key(key(KeyCode::Esc));
+    assert_eq!(app.mode, Mode::Normal);
+    assert!(app.diff.is_none());
+}
+
+#[test]
+fn enter_without_file_focus_does_nothing() {
+    let (_f, mut app) = linear_app(3, 300);
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.mode, Mode::Normal);
+}
+
+#[test]
+fn diff_scrolling_clamps() {
+    let f = Fixture::new();
+    let many: String = (0..50).map(|i| format!("line{i}\n")).collect();
+    let c1 = f.commit("big", &[("a.txt", &many)], &[], &[], 1_000);
+    f.branch("main", c1);
+    f.set_head("refs/heads/main");
+    let repo = GitRepo::discover(f.path()).unwrap();
+    let mut app = App::new_at(repo, 10_000).unwrap();
+    app.handle_key(key(KeyCode::Tab));
+    app.handle_key(key(KeyCode::Enter));
+    app.handle_key(ch('k'));
+    assert_eq!(app.diff.as_ref().unwrap().scroll, 0, "clamps at top");
+    app.handle_key(ch('G'));
+    let bottom = app.diff.as_ref().unwrap().scroll;
+    assert!(bottom > 0);
+    app.handle_key(ch('j'));
+    assert_eq!(
+        app.diff.as_ref().unwrap().scroll,
+        bottom,
+        "clamps at bottom"
+    );
+    app.handle_key(ch('g'));
+    assert_eq!(app.diff.as_ref().unwrap().scroll, 0);
+}
+
+#[test]
+fn diff_works_for_uncommitted_files() {
+    let f = Fixture::new();
+    let c1 = f.commit("base", &[("a.txt", "old\n")], &[], &[], 1_000);
+    f.branch("main", c1);
+    f.set_head("refs/heads/main");
+    f.write_file("a.txt", "new\n");
+    let repo = GitRepo::discover(f.path()).unwrap();
+    let mut app = App::new_at(repo, 10_000).unwrap();
+    app.handle_key(key(KeyCode::Tab));
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.mode, Mode::Diff);
+    let diff = app.diff.as_ref().unwrap();
+    assert!(
+        diff.lines
+            .iter()
+            .any(|l| l.origin == '+' && l.content == "new")
+    );
+}

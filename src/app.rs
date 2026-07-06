@@ -230,10 +230,10 @@ impl App {
 
     pub fn handle_key(&mut self, key: KeyEvent) {
         self.status.clear();
-        // Task 10 turns this into a match once a second mode exists
-        // (a 2-arm match with a wildcard trips clippy::single_match).
-        if self.mode == Mode::Normal {
-            self.handle_normal_key(key);
+        match self.mode {
+            Mode::Normal => self.handle_normal_key(key),
+            Mode::Diff => self.handle_diff_key(key),
+            _ => {} // Search/BranchFilter arrive in later tasks
         }
     }
 
@@ -241,6 +241,7 @@ impl App {
         match (self.focus, key.code) {
             (_, KeyCode::Char('q')) | (_, KeyCode::Esc) => self.should_quit = true,
             (_, KeyCode::Tab) => self.toggle_focus(),
+            (Focus::Files, KeyCode::Enter) => self.open_diff(),
             (Focus::Commits, KeyCode::Char('j')) | (Focus::Commits, KeyCode::Down) => {
                 self.move_selection(1)
             }
@@ -288,5 +289,50 @@ impl App {
         }
         self.file_selected =
             (self.file_selected as isize + delta).clamp(0, len as isize - 1) as usize;
+    }
+
+    /// Open the full-screen diff for the file under the file cursor.
+    fn open_diff(&mut self) {
+        let files = self.current_files();
+        let Some(file) = files.get(self.file_selected) else {
+            return;
+        };
+        let lines = match self.selected_commit() {
+            Some(c) => {
+                let id = c.id.clone();
+                self.repo.commit_file_diff(&id, &file.path)
+            }
+            None => self.repo.worktree_file_diff(&file.path),
+        };
+        match lines {
+            Ok(lines) => {
+                self.diff = Some(DiffState {
+                    title: file.path.clone(),
+                    lines,
+                    scroll: 0,
+                });
+                self.mode = Mode::Diff;
+            }
+            Err(e) => self.status = format!("diff failed: {e:#}"),
+        }
+    }
+
+    fn handle_diff_key(&mut self, key: KeyEvent) {
+        let Some(diff) = self.diff.as_mut() else {
+            self.mode = Mode::Normal;
+            return;
+        };
+        let max = diff.lines.len().saturating_sub(1);
+        match key.code {
+            KeyCode::Char('q') | KeyCode::Esc => {
+                self.diff = None;
+                self.mode = Mode::Normal;
+            }
+            KeyCode::Char('j') | KeyCode::Down => diff.scroll = (diff.scroll + 1).min(max),
+            KeyCode::Char('k') | KeyCode::Up => diff.scroll = diff.scroll.saturating_sub(1),
+            KeyCode::Char('g') => diff.scroll = 0,
+            KeyCode::Char('G') => diff.scroll = max,
+            _ => {}
+        }
     }
 }

@@ -1,4 +1,5 @@
 pub mod detail_view;
+pub mod diff_view;
 pub mod graph_view;
 pub mod util;
 
@@ -40,14 +41,18 @@ pub fn ref_style(kind: RefKind) -> Style {
 }
 
 /// Top-level draw: graph (70%) / detail (30%) / one help line.
+/// In `Mode::Diff` the main area is fully replaced by the full-screen diff.
 pub fn render(frame: &mut Frame, app: &mut App) {
-    let [main_area, detail_area, help_area] = Layout::vertical([
-        Constraint::Percentage(70),
-        Constraint::Percentage(30),
-        Constraint::Length(1),
-    ])
-    .areas(frame.area());
-    graph_view::render(frame, main_area, app);
+    let [main_area, help_area] =
+        Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(frame.area());
+    if app.mode == Mode::Diff {
+        diff_view::render(frame, main_area, app);
+        render_help(frame, help_area, app);
+        return;
+    }
+    let [graph_area, detail_area] =
+        Layout::vertical([Constraint::Percentage(70), Constraint::Percentage(30)]).areas(main_area);
+    graph_view::render(frame, graph_area, app);
     detail_view::render(frame, detail_area, app);
     render_help(frame, help_area, app);
 }

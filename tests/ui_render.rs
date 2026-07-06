@@ -178,3 +178,27 @@ fn detail_panel_for_uncommitted_row() {
     assert!(all.contains("Uncommitted changes"));
     assert!(all.contains("A z.txt"));
 }
+
+#[test]
+fn diff_view_renders_colored_lines_full_screen() {
+    let f = Fixture::new();
+    let c1 = f.commit("base", &[("a.txt", "one\n")], &[], &[], 1_000);
+    let c2 = f.commit("edit", &[("a.txt", "one\ntwo\n")], &[], &[c1], 2_000);
+    f.branch("main", c2);
+    f.set_head("refs/heads/main");
+    let mut app = app_of(&f);
+    app.handle_key(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Tab,
+        crossterm::event::KeyModifiers::NONE,
+    ));
+    app.handle_key(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Enter,
+        crossterm::event::KeyModifiers::NONE,
+    ));
+    let lines = render_app(&mut app, 60, 12);
+    let all = lines.join("\n");
+    assert!(all.contains("a.txt"), "title shows the file path");
+    assert!(all.contains("@@"), "hunk header renders");
+    assert!(all.contains("+two"), "addition renders");
+    assert!(!all.contains("all branches"), "graph view is fully covered");
+}
