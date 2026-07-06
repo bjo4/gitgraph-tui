@@ -180,7 +180,8 @@ impl App {
 
     fn load_all(&mut self) {
         while !self.all_loaded() {
-            if self.load_next_chunk().is_err() {
+            if let Err(e) = self.load_next_chunk() {
+                self.status = format!("load failed: {e:#}");
                 break;
             }
         }
@@ -188,7 +189,8 @@ impl App {
 
     fn ensure_margin(&mut self) {
         while !self.all_loaded() && self.selected + self.load_margin >= self.display_len() {
-            if self.load_next_chunk().is_err() {
+            if let Err(e) = self.load_next_chunk() {
+                self.status = format!("load failed: {e:#}");
                 break;
             }
         }

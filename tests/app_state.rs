@@ -121,3 +121,20 @@ fn empty_repo_yields_an_empty_app() {
     assert_eq!(app.display_len(), 0);
     assert!(app.selected_commit().is_none());
 }
+
+#[test]
+fn load_errors_surface_in_status_instead_of_vanishing() {
+    let (_f, mut app) = linear_app(6, 2);
+    app.reload().unwrap();
+    // Inject an unparseable id into a not-yet-loaded chunk (oids is pub):
+    // Oid::from_str rejects non-hex, so the next chunk load must fail.
+    app.oids[4] = "z".repeat(40);
+    for _ in 0..5 {
+        app.handle_key(ch('j'));
+    }
+    assert!(
+        app.status.contains("load failed"),
+        "status was: {:?}",
+        app.status
+    );
+}
