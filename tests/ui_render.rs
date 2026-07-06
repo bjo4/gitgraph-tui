@@ -220,3 +220,18 @@ fn diff_view_renders_colored_lines_full_screen() {
     assert!(all.contains("+two"), "addition renders");
     assert!(!all.contains("all branches"), "graph view is fully covered");
 }
+
+#[test]
+fn branch_filter_popup_renders_over_the_graph() {
+    let f = merge_fixture();
+    let mut app = app_of(&f);
+    app.handle_key(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Char('b'),
+        crossterm::event::KeyModifiers::NONE,
+    ));
+    let lines = render_app(&mut app, 80, 16);
+    let all = lines.join("\n");
+    assert!(all.contains("filter by branch"));
+    assert!(all.contains("All branches"));
+    assert!(all.contains("feature"));
+}

@@ -397,3 +397,94 @@ fn n_surfaces_load_errors_while_searching() {
         app.status
     );
 }
+
+/// main: c1→c2→c4(HEAD) · feature: c1→c3 — reuses the Task 3 shape.
+fn branchy_app() -> (Fixture, App) {
+    let f = Fixture::new();
+    let c1 = f.commit("c1 init", &[("a.txt", "1")], &[], &[], 1_000);
+    let c2 = f.commit("c2 main work", &[("a.txt", "2")], &[], &[c1], 2_000);
+    let c3 = f.commit("c3 feature work", &[("b.txt", "3")], &[], &[c1], 3_000);
+    let c4 = f.commit("c4 more main", &[("a.txt", "4")], &[], &[c2], 4_000);
+    f.branch("main", c4);
+    f.branch("feature", c3);
+    f.remote_branch("main", c4);
+    f.set_head("refs/heads/main");
+    let repo = GitRepo::discover(f.path()).unwrap();
+    let app = App::new_at(repo, 10_000).unwrap();
+    (f, app)
+}
+
+#[test]
+fn b_opens_the_filter_popup_with_all_branches_first() {
+    let (_f, mut app) = branchy_app();
+    app.handle_key(ch('b'));
+    assert_eq!(app.mode, Mode::BranchFilter);
+    assert!(app.filter_choices[0].is_none(), "row 0 is All branches");
+    let names: Vec<String> = app
+        .filter_choices
+        .iter()
+        .flatten()
+        .map(|r| r.name.clone())
+        .collect();
+    assert!(names.contains(&"main".to_string()));
+    assert!(names.contains(&"feature".to_string()));
+    assert!(
+        names.contains(&"origin/main".to_string()),
+        "remote branches are offered too"
+    );
+}
+
+#[test]
+fn applying_a_branch_filter_narrows_the_walk() {
+    let (_f, mut app) = branchy_app();
+    assert_eq!(app.total_len(), 4);
+    app.handle_key(ch('b'));
+    let feature_pos = app
+        .filter_choices
+        .iter()
+        .position(|c| c.as_ref().is_some_and(|r| r.name == "feature"))
+        .unwrap();
+    for _ in 0..feature_pos {
+        app.handle_key(ch('j'));
+    }
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.mode, Mode::Normal);
+    assert_eq!(app.total_len(), 2); // c3, c1
+    assert!(app.commits.iter().all(|c| c.summary != "c2 main work"));
+    assert_eq!(app.selected, 0);
+}
+
+#[test]
+fn reopening_the_popup_highlights_the_active_filter() {
+    let (_f, mut app) = branchy_app();
+    app.handle_key(ch('b'));
+    app.handle_key(ch('j'));
+    app.handle_key(key(KeyCode::Enter));
+    let picked = app.branch_filter.clone().unwrap();
+    app.handle_key(ch('b'));
+    let highlighted = app.filter_choices[app.filter_selected].clone().unwrap();
+    assert_eq!(highlighted.refname, picked.refname);
+}
+
+#[test]
+fn esc_closes_the_popup_without_changing_the_filter() {
+    let (_f, mut app) = branchy_app();
+    app.handle_key(ch('b'));
+    app.handle_key(ch('j'));
+    app.handle_key(key(KeyCode::Esc));
+    assert_eq!(app.mode, Mode::Normal);
+    assert!(app.branch_filter.is_none());
+    assert_eq!(app.total_len(), 4);
+}
+
+#[test]
+fn r_reloads_and_picks_up_new_commits() {
+    let (f, mut app) = branchy_app();
+    assert_eq!(app.total_len(), 4);
+    let head = git2::Oid::from_str(&app.commits[0].id).unwrap();
+    let c5 = f.commit("c5 fresh", &[("a.txt", "5")], &[], &[head], 5_000);
+    f.branch("main", c5);
+    app.handle_key(ch('r'));
+    assert_eq!(app.total_len(), 5);
+    assert!(app.status.contains("reloaded"));
+}

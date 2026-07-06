@@ -1,6 +1,7 @@
 pub mod detail_view;
 pub mod diff_view;
 pub mod graph_view;
+pub mod popup;
 pub mod util;
 
 use ratatui::Frame;
@@ -55,6 +56,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     graph_view::render(frame, graph_area, app);
     detail_view::render(frame, detail_area, app);
     render_help(frame, help_area, app);
+    if app.mode == Mode::BranchFilter {
+        popup::render(frame, app);
+    }
 }
 
 fn render_help(frame: &mut Frame, area: Rect, app: &App) {

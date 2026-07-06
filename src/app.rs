@@ -10,7 +10,7 @@ use lru::LruCache;
 use ratatui::widgets::ListState;
 
 use crate::git::GitRepo;
-use crate::git::types::{CommitId, CommitInfo, DiffLine, FileChange, RefInfo};
+use crate::git::types::{CommitId, CommitInfo, DiffLine, FileChange, RefInfo, RefKind};
 use crate::graph::{GraphRow, LayoutEngine};
 
 pub const DEFAULT_CHUNK: usize = 300;
@@ -232,9 +232,9 @@ impl App {
         self.status.clear();
         match self.mode {
             Mode::Normal => self.handle_normal_key(key),
-            Mode::Diff => self.handle_diff_key(key),
             Mode::Search => self.handle_search_key(key),
-            _ => {} // BranchFilter arrives in a later task
+            Mode::Diff => self.handle_diff_key(key),
+            Mode::BranchFilter => self.handle_filter_key(key),
         }
     }
 
@@ -263,6 +263,11 @@ impl App {
             (_, KeyCode::Char('N')) => self.next_match(-1),
             (_, KeyCode::Char('g')) => self.select_top(),
             (_, KeyCode::Char('G')) => self.select_bottom(),
+            (_, KeyCode::Char('b')) => self.open_branch_filter(),
+            (_, KeyCode::Char('r')) => match self.reload() {
+                Ok(()) => self.status = "reloaded".to_string(),
+                Err(e) => self.status = format!("reload failed: {e:#}"),
+            },
             _ => {}
         }
     }
@@ -476,6 +481,51 @@ impl App {
             KeyCode::Char('k') | KeyCode::Up => diff.scroll = diff.scroll.saturating_sub(1),
             KeyCode::Char('g') => diff.scroll = 0,
             KeyCode::Char('G') => diff.scroll = max,
+            _ => {}
+        }
+    }
+
+    fn open_branch_filter(&mut self) {
+        let mut choices: Vec<Option<RefInfo>> = vec![None];
+        choices.extend(
+            self.refs
+                .iter()
+                .filter(|r| matches!(r.kind, RefKind::LocalBranch | RefKind::RemoteBranch))
+                .cloned()
+                .map(Some),
+        );
+        self.filter_choices = choices;
+        self.filter_selected = self
+            .filter_choices
+            .iter()
+            .position(|c| match (c, &self.branch_filter) {
+                (None, None) => true,
+                (Some(a), Some(b)) => a.refname == b.refname,
+                _ => false,
+            })
+            .unwrap_or(0);
+        self.mode = Mode::BranchFilter;
+    }
+
+    fn handle_filter_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
+            KeyCode::Char('j') | KeyCode::Down
+                if self.filter_selected + 1 < self.filter_choices.len() =>
+            {
+                self.filter_selected += 1;
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                self.filter_selected = self.filter_selected.saturating_sub(1);
+            }
+            KeyCode::Enter => {
+                self.branch_filter = self.filter_choices[self.filter_selected].clone();
+                self.mode = Mode::Normal;
+                self.selected = 0;
+                if let Err(e) = self.reload() {
+                    self.status = format!("reload failed: {e:#}");
+                }
+            }
             _ => {}
         }
     }

@@ -67,9 +67,17 @@ impl Fixture {
             .expect("commit")
     }
 
+    /// Create or force-move a local branch ref. Uses the raw reference API
+    /// (not `Repository::branch`, which refuses to force-move the branch
+    /// that is the current HEAD — libgit2 mirrors `git branch -f`'s refusal
+    /// to force-update the checked-out branch). Fixtures build history via
+    /// detached commits with explicit parents, so re-pointing the checked-out
+    /// branch after the fact (simulating "new commits appeared upstream")
+    /// must be allowed here.
     pub fn branch(&self, name: &str, target: Oid) {
-        let c = self.repo.find_commit(target).expect("target commit");
-        self.repo.branch(name, &c, true).expect("branch");
+        self.repo
+            .reference(&format!("refs/heads/{name}"), target, true, "test: branch")
+            .expect("branch");
     }
 
     pub fn tag(&self, name: &str, target: Oid) {
