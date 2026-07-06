@@ -427,7 +427,8 @@ impl App {
             }
             if dir > 0 && !self.all_loaded() {
                 let before = self.commits.len();
-                if self.load_next_chunk().is_err() {
+                if let Err(e) = self.load_next_chunk() {
+                    self.status = format!("load failed: {e:#}");
                     return;
                 }
                 let off = self.uncommitted_offset();

@@ -378,3 +378,22 @@ fn n_without_a_confirmed_query_sets_a_hint_status() {
     app.handle_key(ch('n'));
     assert!(app.status.contains('/'));
 }
+
+#[test]
+fn n_surfaces_load_errors_while_searching() {
+    let (_f, mut app) = linear_app(6, 2);
+    app.reload().unwrap();
+    // The last chunk is unloadable; searching past it must say so.
+    app.oids[4] = "z".repeat(40);
+    app.handle_key(ch('/'));
+    for c in "commit 0".chars() {
+        app.handle_key(ch(c));
+    }
+    app.handle_key(key(KeyCode::Enter));
+    app.handle_key(ch('n'));
+    assert!(
+        app.status.contains("load failed"),
+        "status was: {:?}",
+        app.status
+    );
+}
