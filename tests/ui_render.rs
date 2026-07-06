@@ -222,6 +222,28 @@ fn diff_view_renders_colored_lines_full_screen() {
 }
 
 #[test]
+fn empty_repo_shows_a_placeholder_message_in_the_graph_panel() {
+    let f = Fixture::new();
+    let mut app = app_of(&f);
+    let lines = render_app(&mut app, 60, 12);
+    // Row 1 is the first graph-list row (row 0 is the border/title).
+    // Asserting the graph panel specifically: the detail panel's own
+    // "No commits yet" fallback (Task 9) would make a whole-buffer
+    // assertion pass before this task's change.
+    assert!(lines[1].contains("No commits yet"));
+}
+
+#[test]
+fn empty_repo_with_untracked_files_shows_hint_and_uncommitted_row() {
+    let f = Fixture::new();
+    f.write_file("first.txt", "hi\n");
+    let mut app = app_of(&f);
+    let lines = render_app(&mut app, 60, 12);
+    assert!(lines[1].contains("Uncommitted changes (1 files)"));
+    assert!(lines[2].contains("No commits yet"));
+}
+
+#[test]
 fn branch_filter_popup_renders_over_the_graph() {
     let f = merge_fixture();
     let mut app = app_of(&f);

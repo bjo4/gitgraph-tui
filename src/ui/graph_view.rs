@@ -20,9 +20,17 @@ const MAX_GRAPH_W: usize = 32;
 pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
     let graph_w = graph_width(app);
     let text_w = (area.width as usize).saturating_sub(2 + graph_w + 1); // borders + gap
-    let items: Vec<ListItem> = (0..app.display_len())
+    let mut items: Vec<ListItem> = (0..app.display_len())
         .map(|i| ListItem::new(row_line(app, i, graph_w, text_w)))
         .collect();
+    if app.commits.is_empty() {
+        // Spec §7: empty repo shows the hint AND the worktree status —
+        // so the hint renders below the (optional) uncommitted row.
+        items.push(ListItem::new(Line::from(Span::styled(
+            " No commits yet",
+            Style::new().fg(Color::DarkGray),
+        ))));
+    }
     let filter = match &app.branch_filter {
         Some(r) => r.name.clone(),
         None => "all branches".to_string(),
