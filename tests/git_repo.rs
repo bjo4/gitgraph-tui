@@ -140,3 +140,17 @@ fn load_commits_in_chunks_equals_loading_all_at_once() {
     chunked.extend(repo.load_commits(&ids[2..]).unwrap());
     assert_eq!(all, chunked);
 }
+
+#[test]
+fn topological_order_wins_over_clock_skew() {
+    let f = Fixture::new();
+    // Clock skew: the child is authored BEFORE its parent. A pure time
+    // sort would emit c1 first; topological order must emit the child first.
+    let c1 = f.commit("parent late clock", &[("a.txt", "1")], &[], &[], 5_000);
+    let c2 = f.commit("child early clock", &[("a.txt", "2")], &[], &[c1], 1_000);
+    f.branch("main", c2);
+    f.set_head("refs/heads/main");
+    let repo = GitRepo::discover(f.path()).unwrap();
+    let ids = repo.commit_ids(None).unwrap();
+    assert_eq!(ids, vec![c2.to_string(), c1.to_string()]);
+}
