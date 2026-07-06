@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use git2::Repository;
+use git2::{Oid, Repository, Sort};
 
-use super::types::{CommitId, RefInfo, RefKind};
+use super::types::{CommitId, CommitInfo, RefInfo, RefKind};
 
 pub struct GitRepo {
     pub(crate) inner: Repository,
@@ -91,5 +91,55 @@ impl GitRepo {
             map.entry(r.target.clone()).or_default().push(r.clone());
         }
         map
+    }
+
+    /// Walk the whole commit DAG (oids only — cheap even for huge repos).
+    /// `filter`: a full refname such as "refs/heads/main" limits the walk
+    /// to commits reachable from that ref; None walks every ref plus HEAD.
+    pub fn commit_ids(&self, filter: Option<&str>) -> Result<Vec<CommitId>> {
+        let mut walk = self.inner.revwalk()?;
+        walk.set_sorting(Sort::TOPOLOGICAL | Sort::TIME)?;
+        match filter {
+            Some(refname) => {
+                walk.push_ref(refname)
+                    .with_context(|| format!("unknown ref: {refname}"))?;
+            }
+            None => {
+                walk.push_glob("refs/heads/*")?;
+                walk.push_glob("refs/tags/*")?;
+                walk.push_glob("refs/remotes/*")?;
+                if self.inner.head().is_ok() {
+                    walk.push_head()?;
+                }
+            }
+        }
+        Ok(walk
+            .filter_map(|o| o.ok())
+            .map(|oid| oid.to_string())
+            .collect())
+    }
+
+    /// Convert one chunk of commit ids into full CommitInfo values.
+    pub fn load_commits(&self, ids: &[CommitId]) -> Result<Vec<CommitInfo>> {
+        ids.iter()
+            .map(|id| {
+                let oid = Oid::from_str(id).context("invalid commit id")?;
+                let c = self
+                    .inner
+                    .find_commit(oid)
+                    .with_context(|| format!("commit {id} not found"))?;
+                let author = c.author();
+                Ok(CommitInfo {
+                    short_id: id[..7].to_string(),
+                    id: id.clone(),
+                    parents: c.parent_ids().map(|p| p.to_string()).collect(),
+                    summary: c.summary().ok().flatten().unwrap_or("").to_string(),
+                    message: c.message().unwrap_or("").to_string(),
+                    author_name: author.name().unwrap_or("").to_string(),
+                    author_email: author.email().unwrap_or("").to_string(),
+                    timestamp: author.when().seconds(),
+                })
+            })
+            .collect()
     }
 }
