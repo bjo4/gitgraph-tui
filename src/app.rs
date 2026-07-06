@@ -238,13 +238,55 @@ impl App {
     }
 
     fn handle_normal_key(&mut self, key: KeyEvent) {
-        match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
-            KeyCode::Char('j') | KeyCode::Down => self.move_selection(1),
-            KeyCode::Char('k') | KeyCode::Up => self.move_selection(-1),
-            KeyCode::Char('g') => self.select_top(),
-            KeyCode::Char('G') => self.select_bottom(),
+        match (self.focus, key.code) {
+            (_, KeyCode::Char('q')) | (_, KeyCode::Esc) => self.should_quit = true,
+            (_, KeyCode::Tab) => self.toggle_focus(),
+            (Focus::Commits, KeyCode::Char('j')) | (Focus::Commits, KeyCode::Down) => {
+                self.move_selection(1)
+            }
+            (Focus::Commits, KeyCode::Char('k')) | (Focus::Commits, KeyCode::Up) => {
+                self.move_selection(-1)
+            }
+            (Focus::Files, KeyCode::Char('j')) | (Focus::Files, KeyCode::Down) => {
+                self.move_file_selection(1)
+            }
+            (Focus::Files, KeyCode::Char('k')) | (Focus::Files, KeyCode::Up) => {
+                self.move_file_selection(-1)
+            }
+            (_, KeyCode::Char('g')) => self.select_top(),
+            (_, KeyCode::Char('G')) => self.select_bottom(),
             _ => {}
         }
+    }
+
+    /// Changed files for the selected row (uncommitted row or commit),
+    /// LRU-cached per commit.
+    pub fn current_files(&mut self) -> Vec<FileChange> {
+        let Some(commit) = self.selected_commit() else {
+            return self.uncommitted.clone();
+        };
+        let id = commit.id.clone();
+        if let Some(files) = self.detail_cache.get(&id) {
+            return files.clone();
+        }
+        let files = self.repo.commit_files(&id).unwrap_or_default();
+        self.detail_cache.put(id, files.clone());
+        files
+    }
+
+    fn toggle_focus(&mut self) {
+        self.focus = match self.focus {
+            Focus::Commits => Focus::Files,
+            Focus::Files => Focus::Commits,
+        };
+    }
+
+    fn move_file_selection(&mut self, delta: isize) {
+        let len = self.current_files().len();
+        if len == 0 {
+            return;
+        }
+        self.file_selected =
+            (self.file_selected as isize + delta).clamp(0, len as isize - 1) as usize;
     }
 }

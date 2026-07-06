@@ -124,3 +124,57 @@ fn cjk_summaries_render_without_panicking() {
     let lines = render_app(&mut app, 60, 10);
     assert!(lines.join("\n").contains("加入中文"));
 }
+
+#[test]
+fn detail_panel_shows_commit_meta_and_file_list() {
+    let f = merge_fixture();
+    let mut app = app_of(&f);
+    // select "main work" (row with a real file change)
+    app.handle_key(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Char('j'),
+        crossterm::event::KeyModifiers::NONE,
+    ));
+    app.handle_key(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Char('j'),
+        crossterm::event::KeyModifiers::NONE,
+    ));
+    let lines = render_app(&mut app, 90, 20);
+    let all = lines.join("\n");
+    assert!(all.contains("Test Author <test@example.com>"));
+    assert!(all.contains("1970-01-01 00:"), "absolute date renders");
+    assert!(
+        all.contains("M a.txt"),
+        "file list renders with change kind"
+    );
+    assert!(all.contains("+1"), "addition count renders");
+}
+
+#[test]
+fn detail_panel_shows_the_full_message_body() {
+    let f = Fixture::new();
+    let c1 = f.commit(
+        "subject line\n\nbody first line\nbody second line",
+        &[("a.txt", "1\n")],
+        &[],
+        &[],
+        1_000,
+    );
+    f.branch("main", c1);
+    f.set_head("refs/heads/main");
+    let mut app = app_of(&f);
+    let lines = render_app(&mut app, 90, 24);
+    let all = lines.join("\n");
+    assert!(all.contains("body first line"));
+    assert!(all.contains("body second line"));
+}
+
+#[test]
+fn detail_panel_for_uncommitted_row() {
+    let f = merge_fixture();
+    f.write_file("z.txt", "wip\n");
+    let mut app = app_of(&f);
+    let lines = render_app(&mut app, 90, 20);
+    let all = lines.join("\n");
+    assert!(all.contains("Uncommitted changes"));
+    assert!(all.contains("A z.txt"));
+}

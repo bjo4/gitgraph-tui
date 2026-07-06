@@ -3,7 +3,9 @@ mod common;
 use common::Fixture;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use gitgraph_tui::app::App;
+use gitgraph_tui::app::Focus;
 use gitgraph_tui::git::GitRepo;
+use gitgraph_tui::git::types::ChangeKind;
 
 pub fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
@@ -137,4 +139,66 @@ fn load_errors_surface_in_status_instead_of_vanishing() {
         "status was: {:?}",
         app.status
     );
+}
+
+#[test]
+fn current_files_returns_commit_changes_and_caches_them() {
+    let (_f, mut app) = linear_app(3, 300);
+    let files = app.current_files();
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].path, "a.txt");
+    assert_eq!(files[0].kind, ChangeKind::Modified); // commit 2 rewrites a.txt
+    let id = app.selected_commit().unwrap().id.clone();
+    assert!(app.detail_cache.contains(&id), "result must be cached");
+}
+
+#[test]
+fn current_files_for_the_uncommitted_row_lists_worktree_changes() {
+    let f = Fixture::new();
+    let c1 = f.commit("base", &[("a.txt", "1\n")], &[], &[], 1_000);
+    f.branch("main", c1);
+    f.set_head("refs/heads/main");
+    f.write_file("b.txt", "new\n");
+    let repo = GitRepo::discover(f.path()).unwrap();
+    let mut app = App::new_at(repo, 10_000).unwrap();
+    let files = app.current_files();
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].path, "b.txt");
+}
+
+#[test]
+fn tab_toggles_focus_and_j_k_move_the_file_cursor() {
+    let f = Fixture::new();
+    let c1 = f.commit(
+        "two files",
+        &[("a.txt", "1\n"), ("b.txt", "2\n")],
+        &[],
+        &[],
+        1_000,
+    );
+    f.branch("main", c1);
+    f.set_head("refs/heads/main");
+    let repo = GitRepo::discover(f.path()).unwrap();
+    let mut app = App::new_at(repo, 10_000).unwrap();
+    assert_eq!(app.focus, Focus::Commits);
+    app.handle_key(key(KeyCode::Tab));
+    assert_eq!(app.focus, Focus::Files);
+    app.handle_key(ch('j'));
+    assert_eq!(app.file_selected, 1);
+    app.handle_key(ch('j'));
+    assert_eq!(app.file_selected, 1, "clamps at the last file");
+    app.handle_key(ch('k'));
+    assert_eq!(app.file_selected, 0);
+    app.handle_key(key(KeyCode::Tab));
+    assert_eq!(app.focus, Focus::Commits);
+}
+
+#[test]
+fn moving_the_commit_cursor_resets_file_focus_state() {
+    let (_f, mut app) = linear_app(3, 300);
+    app.handle_key(key(KeyCode::Tab));
+    app.handle_key(ch('j')); // file cursor (only 1 file → stays 0)
+    app.handle_key(key(KeyCode::Tab));
+    app.handle_key(ch('j')); // commit cursor
+    assert_eq!(app.file_selected, 0);
 }

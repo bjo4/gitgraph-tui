@@ -1,3 +1,4 @@
+pub mod detail_view;
 pub mod graph_view;
 pub mod util;
 
@@ -5,7 +6,6 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::Line;
-use ratatui::widgets::Block;
 
 use crate::app::App;
 use crate::app::Mode;
@@ -48,13 +48,8 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     ])
     .areas(frame.area());
     graph_view::render(frame, main_area, app);
-    render_detail_placeholder(frame, detail_area);
+    detail_view::render(frame, detail_area, app);
     render_help(frame, help_area, app);
-}
-
-/// Replaced by detail_view in the next task.
-fn render_detail_placeholder(frame: &mut Frame, area: Rect) {
-    frame.render_widget(Block::bordered().title(" commit "), area);
 }
 
 fn render_help(frame: &mut Frame, area: Rect, app: &App) {
