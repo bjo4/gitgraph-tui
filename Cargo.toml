@@ -5,12 +5,16 @@ edition = "2024"
 rust-version = "1.88"
 description = "A read-only git history graph viewer for the terminal"
 license = "MIT"
+repository = "https://github.com/bjo4/gitgraph-tui"
+readme = "README.md"
+keywords = ["git", "tui", "terminal", "graph", "log"]
+categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 crossterm = "0.29"
-git2 = "0.21"
+git2 = { version = "0.21", default-features = false }
 lru = "0.18"
 ratatui = "0.30"
 time = { version = "0.3", features = ["formatting", "macros"] }
