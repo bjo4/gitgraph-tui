@@ -39,8 +39,11 @@ fn main() -> ExitCode {
 fn run(mut terminal: DefaultTerminal, mut app: App) -> anyhow::Result<()> {
     while !app.should_quit {
         terminal.draw(|frame| ui::render(frame, &mut app))?;
-        if let Some(key) = event::poll_key(Duration::from_millis(250))? {
-            app.handle_key(key);
+        // A key press is handled; an idle timeout drives auto-refresh, so an
+        // external git change (or an unsaved edit) shows up without a keystroke.
+        match event::poll_key(Duration::from_millis(250))? {
+            Some(key) => app.handle_key(key),
+            None => app.on_tick(),
         }
     }
     Ok(())

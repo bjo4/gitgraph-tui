@@ -11,10 +11,15 @@ use ratatui::widgets::ListState;
 
 use crate::git::GitRepo;
 use crate::git::types::{CommitId, CommitInfo, DiffLine, FileChange, RefInfo, RefKind};
+use crate::git::watch::Fingerprint;
 use crate::graph::{GraphRow, LayoutEngine};
 
 pub const DEFAULT_CHUNK: usize = 300;
 const DETAIL_CACHE_SIZE: usize = 50;
+/// Idle ticks (~250 ms each) between worktree-status polls. The `.git`
+/// fingerprint is checked every tick; re-diffing the worktree is heavier, so
+/// it runs less often — enough to notice an unsaved edit within ~2 s.
+const WORKTREE_POLL_TICKS: u32 = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -79,6 +84,14 @@ pub struct App {
     pub now: i64,
     pub status: String,
     pub should_quit: bool,
+    /// Last successfully-loaded `.git` fingerprint; a change triggers an auto
+    /// soft-reload.
+    git_fp: Fingerprint,
+    /// A fingerprint whose soft-reload failed. Suppresses retrying that exact
+    /// state every tick, while still retrying as soon as git moves again.
+    failed_fp: Option<Fingerprint>,
+    /// Idle ticks accrued since the last worktree-status poll.
+    worktree_ticks: u32,
 }
 
 impl App {
@@ -117,16 +130,44 @@ impl App {
             now,
             status: String::new(),
             should_quit: false,
+            git_fp: Fingerprint::default(),
+            failed_fp: None,
+            worktree_ticks: 0,
         };
-        app.reload()?;
+        app.reload()?; // also seeds git_fp via refresh_fingerprint
         Ok(app)
     }
 
     /// Re-read refs and commits with the current chunk_size/branch_filter.
-    /// Also serves the `r` key.
+    /// Clears search state and resets the file cursor — the hard reset behind
+    /// the `r` key and branch-filter changes. Selection is clamped, not
+    /// preserved; auto-refresh uses [`soft_reload`](Self::soft_reload) instead.
     pub fn reload(&mut self) -> Result<()> {
+        self.reload_data()?;
+        self.search.input.clear();
+        self.search.query.clear();
+        self.search.matches.clear();
+        self.selected = self.selected.min(self.display_len().saturating_sub(1));
+        self.file_selected = 0;
+        self.sync_list_state();
+        self.refresh_fingerprint();
+        Ok(())
+    }
+
+    /// Re-read refs, commit ids, and worktree status; reset the loaded prefix
+    /// and caches. Leaves selection and search untouched so callers can decide
+    /// their own restore policy. A branch filter whose ref has disappeared is
+    /// dropped (falling back to all branches) so auto-refresh can't wedge on a
+    /// deleted branch.
+    fn reload_data(&mut self) -> Result<()> {
         self.refs = self.repo.refs()?;
         self.ref_map = GitRepo::ref_map(&self.refs);
+        if let Some(filter) = self.branch_filter.clone()
+            && !self.refs.iter().any(|r| r.refname == filter.refname)
+        {
+            self.status = format!("branch '{}' is gone — showing all", filter.name);
+            self.branch_filter = None;
+        }
         let filter = self.branch_filter.as_ref().map(|r| r.refname.clone());
         self.oids = self.repo.commit_ids(filter.as_deref())?;
         self.commits.clear();
@@ -134,14 +175,111 @@ impl App {
         self.engine.reset();
         self.uncommitted = self.repo.worktree_status().unwrap_or_default();
         self.detail_cache.clear();
-        self.search.input.clear();
-        self.search.query.clear();
-        self.search.matches.clear();
         self.load_next_chunk()?;
-        self.selected = self.selected.min(self.display_len().saturating_sub(1));
-        self.file_selected = 0;
-        self.sync_list_state();
         Ok(())
+    }
+
+    /// Reload after an external git change while keeping the user in place:
+    /// the same commit stays selected (found by id in the fresh walk, loading
+    /// chunks as needed), and a confirmed search keeps its query with matches
+    /// recomputed. Used by the idle auto-refresh tick, never by a keypress.
+    pub fn soft_reload(&mut self) -> Result<()> {
+        let anchor = self.selected_commit().map(|c| c.id.clone());
+        let prev = self.selected;
+        let query = self.search.query.clone();
+
+        self.reload_data()?;
+
+        let len = self.display_len();
+        if len == 0 {
+            self.selected = 0;
+        } else if let Some(pos) = anchor
+            .as_deref()
+            .and_then(|id| self.oids.iter().position(|o| o == id))
+        {
+            // Bring the anchor commit into the loaded prefix before selecting.
+            while self.commits.len() <= pos && !self.all_loaded() {
+                self.load_next_chunk()?;
+            }
+            self.selected = (pos + self.uncommitted_offset()).min(self.display_len() - 1);
+        } else {
+            // Anchor gone (amend/rebase) or the uncommitted row: hold position.
+            self.selected = prev.min(len - 1);
+        }
+        self.file_selected = 0;
+
+        // Rehighlight against the active query — the confirmed one, or the
+        // in-progress input while the search box is still open — since a
+        // rebuilt commit list may have shifted every row index.
+        self.search.matches.clear();
+        let active = if query.is_empty() {
+            self.search.input.clone()
+        } else {
+            query
+        };
+        if !active.is_empty() {
+            self.recompute_matches(&active);
+        }
+
+        self.ensure_margin();
+        self.sync_list_state();
+        self.refresh_fingerprint();
+        Ok(())
+    }
+
+    /// Called once per idle tick from the main loop. Cheap `.git` fingerprint
+    /// check every time; a heavier worktree re-poll only every
+    /// `WORKTREE_POLL_TICKS`. A changed fingerprint takes precedence and does a
+    /// full soft-reload (which re-reads the worktree anyway).
+    pub fn on_tick(&mut self) {
+        let fp = Fingerprint::snapshot(self.repo.git_dir(), self.repo.common_dir());
+        if fp == self.git_fp {
+            self.worktree_ticks += 1;
+            if self.worktree_ticks >= WORKTREE_POLL_TICKS {
+                self.worktree_ticks = 0;
+                self.refresh_worktree();
+            }
+            return;
+        }
+        // `.git` changed. If this exact state already failed to load, wait for
+        // git to move again rather than spinning on it every tick — but keep
+        // `git_fp` at the last good state so a transient failure self-heals the
+        // moment a loadable state appears.
+        if self.failed_fp.as_ref() == Some(&fp) {
+            return;
+        }
+        if let Err(e) = self.soft_reload() {
+            self.status = format!("auto-refresh failed: {e:#}");
+            self.failed_fp = Some(fp);
+        }
+    }
+
+    fn refresh_fingerprint(&mut self) {
+        self.git_fp = Fingerprint::snapshot(self.repo.git_dir(), self.repo.common_dir());
+        self.failed_fp = None;
+        self.worktree_ticks = 0;
+    }
+
+    /// Re-diff the worktree only. Catches unsaved edits that don't touch
+    /// `.git`; fixes selection for the synthetic uncommitted row appearing or
+    /// disappearing so the same commit stays under the cursor.
+    fn refresh_worktree(&mut self) {
+        let fresh = self.repo.worktree_status().unwrap_or_default();
+        if fresh == self.uncommitted {
+            return;
+        }
+        let had = self.uncommitted_offset();
+        self.uncommitted = fresh;
+        match (had, self.uncommitted_offset()) {
+            (0, 1) => self.selected += 1, // row 0 inserted: shift to stay put
+            (1, 0) => self.selected = self.selected.saturating_sub(1),
+            _ => {}
+        }
+        self.selected = self.selected.min(self.display_len().saturating_sub(1));
+        self.file_selected = self
+            .file_selected
+            .min(self.current_files().len().saturating_sub(1));
+        self.sync_list_state();
     }
 
     pub fn uncommitted_offset(&self) -> usize {

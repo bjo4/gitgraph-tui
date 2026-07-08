@@ -29,6 +29,17 @@ impl GitRepo {
         Ok(Self { inner })
     }
 
+    /// The per-worktree git directory (holds HEAD, index, …).
+    pub fn git_dir(&self) -> &Path {
+        self.inner.path()
+    }
+
+    /// The shared git directory that stores refs and packed-refs. Equal to
+    /// `git_dir` for an ordinary repo; differs only for linked worktrees.
+    pub fn common_dir(&self) -> &Path {
+        self.inner.commondir()
+    }
+
     /// Repository directory name, for the title bar.
     pub fn name(&self) -> String {
         let p = self.inner.workdir().unwrap_or_else(|| self.inner.path());
