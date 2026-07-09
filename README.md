@@ -34,6 +34,9 @@ ever writes to your repository.
   history until the next match
 - **Branch filter** — show only what's reachable from one branch
 - **Uncommitted changes** — a live row above the newest commit
+- **Live auto-refresh** — external commits, checkouts, branch/tag edits, and
+  worktree changes show up on their own, no keypress; your cursor and active
+  search stay put across the refresh
 - **Big-repo friendly** — history loads in chunks of 300 as you scroll
 - **Read-only by design** — no checkout, no merge, no reset. Ever.
 
@@ -49,7 +52,7 @@ Downloads the prebuilt binary for your platform from the latest GitHub
 release, verifies its sha256, and installs to `~/.local/bin`.
 
 - Choose the directory: `GITGRAPH_INSTALL_DIR=/usr/local/bin curl ... | sh`
-- Pin a version: `GITGRAPH_VERSION=v0.1.0 curl ... | sh`
+- Pin a version: `GITGRAPH_VERSION=v0.2.0 curl ... | sh`
 - No prebuilt binary for your platform? The script falls back to
   `cargo install` automatically (needs [Rust](https://rustup.rs)).
 
@@ -87,7 +90,7 @@ Tip: `alias gg=gitgraph-tui`
 | `/` | incremental search (message, author, hash) |
 | `n` / `N` | next / previous match (auto-loads older commits) |
 | `b` | filter by branch |
-| `r` | reload the repository |
+| `r` | force a full reload (the view also auto-refreshes on its own) |
 | `Esc` / `q` | back / quit |
 
 ## How it works

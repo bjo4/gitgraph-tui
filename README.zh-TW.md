@@ -31,6 +31,8 @@ commit 詳情、diff、搜尋——而且絕對不會寫入你的 repository。
 - **增量搜尋** — 訊息/作者/hash；`n`/`N` 自動載入更舊的歷史直到下一個符合
 - **分支篩選** — 只看某條分支可達的 commit
 - **未提交變更** — 最新 commit 上方的即時狀態列
+- **即時自動更新** — 其他 terminal 的 commit、切換分支、branch/tag 變動，以及工作區
+  檔案異動都會自動反映，無需按鍵；游標與搜尋條件在刷新後仍保留
 - **大型 repo 友善** — 歷史隨捲動以每 300 筆分塊載入
 - **設計上唯讀** — 沒有 checkout、merge、reset。永遠不會有。
 
@@ -46,7 +48,7 @@ curl -fsSL https://raw.githubusercontent.com/bjo4/gitgraph-tui/main/install.sh |
 安裝到 `~/.local/bin`。
 
 - 指定安裝目錄：`GITGRAPH_INSTALL_DIR=/usr/local/bin curl ... | sh`
-- 指定版本：`GITGRAPH_VERSION=v0.1.0 curl ... | sh`
+- 指定版本：`GITGRAPH_VERSION=v0.2.0 curl ... | sh`
 - 你的平台沒有預編譯檔？腳本會自動改用 `cargo install`
   從原始碼建置（需要 [Rust](https://rustup.rs)）。
 
@@ -84,7 +86,7 @@ gitgraph-tui ~/src/foo    # 指定路徑
 | `/` | 增量搜尋（訊息、作者、hash） |
 | `n` / `N` | 下一個 / 上一個符合（自動載入更舊的 commit） |
 | `b` | 依分支篩選 |
-| `r` | 重新載入 repository |
+| `r` | 強制完整重新載入（畫面本來就會自動更新）|
 | `Esc` / `q` | 返回 / 離開 |
 
 ## 運作原理
