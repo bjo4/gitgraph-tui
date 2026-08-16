@@ -124,10 +124,9 @@ impl GitRepo {
                 }
             }
         }
-        Ok(walk
-            .filter_map(|o| o.ok())
-            .map(|oid| oid.to_string())
-            .collect())
+        walk.map(|result| result.map(|oid| oid.to_string()))
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .context("failed while walking commit history")
     }
 
     /// Convert one chunk of commit ids into full CommitInfo values.

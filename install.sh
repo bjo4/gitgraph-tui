@@ -32,14 +32,36 @@ fetch() {
 fallback_cargo() {
   say "falling back to building from source with cargo."
   if have cargo; then
-    say "running: cargo install --git https://github.com/$REPO --locked"
+    if [ -n "$VERSION" ]; then
+      say "running: cargo install --git https://github.com/$REPO --tag $VERSION --locked"
+    else
+      say "running: cargo install --git https://github.com/$REPO --locked"
+    fi
     say "(this compiles the project and takes a few minutes)"
-    cargo install --git "https://github.com/$REPO" --locked
+    # VERSION originates from a release tag/API value; keep it a separate
+    # argument so a requested release cannot silently fall back to main.
+    if [ -n "$VERSION" ]; then
+      cargo install --git "https://github.com/$REPO" --tag "$VERSION" --locked
+    else
+      cargo install --git "https://github.com/$REPO" --locked
+    fi
     say "done. installed to \$CARGO_HOME/bin (usually ~/.cargo/bin)."
     exit 0
   fi
   err "cargo not found. Install Rust from https://rustup.rs and re-run, or download a release manually: https://github.com/$REPO/releases"
 }
+
+tmpdir=$(mktemp -d)
+trap 'rm -rf "$tmpdir"' EXIT
+
+# --- resolve version ---
+if [ -z "$VERSION" ]; then
+  if ! fetch "https://api.github.com/repos/$REPO/releases/latest" "$tmpdir/latest.json"; then
+    err "cannot query the latest release from the GitHub API. Set GITGRAPH_VERSION=vX.Y.Z and retry."
+  fi
+  VERSION=$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$tmpdir/latest.json" | head -n 1)
+  [ -n "$VERSION" ] || err "could not determine the latest version. Set GITGRAPH_VERSION=vX.Y.Z and retry."
+fi
 
 # --- detect platform ---
 os=$(uname -s)
@@ -59,18 +81,6 @@ if [ -z "$os_part" ] || [ -z "$arch_part" ]; then
   fallback_cargo
 fi
 target="${arch_part}-${os_part}"
-
-tmpdir=$(mktemp -d)
-trap 'rm -rf "$tmpdir"' EXIT
-
-# --- resolve version ---
-if [ -z "$VERSION" ]; then
-  if ! fetch "https://api.github.com/repos/$REPO/releases/latest" "$tmpdir/latest.json"; then
-    err "cannot query the latest release from the GitHub API. Set GITGRAPH_VERSION=vX.Y.Z and retry."
-  fi
-  VERSION=$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$tmpdir/latest.json" | head -n 1)
-  [ -n "$VERSION" ] || err "could not determine the latest version. Set GITGRAPH_VERSION=vX.Y.Z and retry."
-fi
 
 say "gitgraph-tui installer"
 say "  platform: $target"
@@ -94,7 +104,7 @@ say "  verifying sha256 ..."
   elif have shasum; then
     shasum -a 256 -c "$asset.sha256" >/dev/null 2>&1
   else
-    say "warning: sha256sum/shasum not found — skipping verification" >&2
+    err "sha256sum or shasum is required to verify the download"
   fi
 ) || err "checksum mismatch — aborting (corrupted or tampered download)"
 

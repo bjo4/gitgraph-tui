@@ -84,6 +84,74 @@ fn renames_are_detected_when_content_is_identical() {
 }
 
 #[test]
+fn opening_a_rename_uses_the_same_similarity_detection_as_the_file_list() {
+    let f = Fixture::new();
+    let c1 = f.commit(
+        "base",
+        &[("old.txt", "same content\nlines\n")],
+        &[],
+        &[],
+        1_000,
+    );
+    let c2 = f.commit(
+        "rename",
+        &[("new.txt", "same content\nlines\n")],
+        &["old.txt"],
+        &[c1],
+        2_000,
+    );
+    f.branch("main", c2);
+    f.set_head("refs/heads/main");
+    let repo = GitRepo::discover(f.path()).unwrap();
+    let lines = repo.commit_file_diff(&c2.to_string(), "new.txt").unwrap();
+    assert!(
+        lines.iter().all(|line| !matches!(line.origin, '+' | '-')),
+        "an identical rename must not render as a whole-file delete/add"
+    );
+}
+
+#[test]
+fn metacharacters_in_a_filename_are_matched_literally() {
+    let f = Fixture::new();
+    let c1 = f.commit(
+        "base",
+        &[("a1.txt", "plain\n"), ("a[1].txt", "old\n")],
+        &[],
+        &[],
+        1_000,
+    );
+    let c2 = f.commit(
+        "edit",
+        &[("a1.txt", "other\n"), ("a[1].txt", "literal\n")],
+        &[],
+        &[c1],
+        2_000,
+    );
+    f.branch("main", c2);
+    f.set_head("refs/heads/main");
+    let repo = GitRepo::discover(f.path()).unwrap();
+    let lines = repo.commit_file_diff(&c2.to_string(), "a[1].txt").unwrap();
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.origin == '+' && line.content == "literal")
+    );
+    assert!(!lines.iter().any(|line| line.content == "other"));
+}
+
+#[test]
+fn diff_preserves_the_no_newline_marker() {
+    let f = Fixture::new();
+    let c1 = f.commit("base", &[("a.txt", "old")], &[], &[], 1_000);
+    let c2 = f.commit("edit", &[("a.txt", "new")], &[], &[c1], 2_000);
+    f.branch("main", c2);
+    f.set_head("refs/heads/main");
+    let repo = GitRepo::discover(f.path()).unwrap();
+    let lines = repo.commit_file_diff(&c2.to_string(), "a.txt").unwrap();
+    assert!(lines.iter().any(|line| line.origin == '\\'));
+}
+
+#[test]
 fn binary_files_are_flagged() {
     let f = Fixture::new();
     let c1 = f.commit("bin", &[("blob.bin", "a\0b\0c")], &[], &[], 1_000);

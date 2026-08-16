@@ -222,6 +222,33 @@ fn diff_view_renders_colored_lines_full_screen() {
 }
 
 #[test]
+fn diff_bottom_scroll_accounts_for_the_visible_viewport() {
+    let f = Fixture::new();
+    let many: String = (0..50).map(|i| format!("line{i}\n")).collect();
+    let c1 = f.commit("big", &[("a.txt", &many)], &[], &[], 1_000);
+    f.branch("main", c1);
+    f.set_head("refs/heads/main");
+    let mut app = app_of(&f);
+    for code in [
+        crossterm::event::KeyCode::Tab,
+        crossterm::event::KeyCode::Enter,
+    ] {
+        app.handle_key(crossterm::event::KeyEvent::new(
+            code,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+    }
+    render_app(&mut app, 60, 12);
+    let diff = app.diff.as_ref().unwrap();
+    let expected_bottom = diff.lines.len().saturating_sub(diff.viewport_height);
+    app.handle_key(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Char('G'),
+        crossterm::event::KeyModifiers::NONE,
+    ));
+    assert_eq!(app.diff.as_ref().unwrap().scroll, expected_bottom);
+}
+
+#[test]
 fn empty_repo_shows_a_placeholder_message_in_the_graph_panel() {
     let f = Fixture::new();
     let mut app = app_of(&f);

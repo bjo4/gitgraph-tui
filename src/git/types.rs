@@ -51,7 +51,8 @@ pub struct FileChange {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiffLine {
-    /// git2 line origin: '+', '-', ' ' (context), '@' (hunk header), 'B' (binary marker).
+    /// git2 line origin: '+', '-', ' ' (context), '\\' (no-newline marker),
+    /// '@' (hunk header), or 'B' (binary marker).
     pub origin: char,
     pub content: String,
 }

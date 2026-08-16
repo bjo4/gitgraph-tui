@@ -50,6 +50,22 @@ pub struct DiffState {
     pub title: String,
     pub lines: Vec<DiffLine>,
     pub scroll: usize,
+    /// Visible content rows, updated by the renderer after terminal resizes.
+    pub viewport_height: usize,
+}
+
+/// Fully staged repository data. Reloads build this off to the side so a
+/// transient libgit2 failure never destroys the last successfully drawn view.
+struct ReloadData {
+    refs: Vec<RefInfo>,
+    ref_map: HashMap<CommitId, Vec<RefInfo>>,
+    oids: Vec<CommitId>,
+    commits: Vec<CommitInfo>,
+    rows: Vec<GraphRow>,
+    engine: LayoutEngine,
+    uncommitted: Vec<FileChange>,
+    branch_filter: Option<RefInfo>,
+    dropped_filter: Option<String>,
 }
 
 pub struct App {
@@ -160,23 +176,63 @@ impl App {
     /// dropped (falling back to all branches) so auto-refresh can't wedge on a
     /// deleted branch.
     fn reload_data(&mut self) -> Result<()> {
-        self.refs = self.repo.refs()?;
-        self.ref_map = GitRepo::ref_map(&self.refs);
-        if let Some(filter) = self.branch_filter.clone()
-            && !self.refs.iter().any(|r| r.refname == filter.refname)
-        {
-            self.status = format!("branch '{}' is gone — showing all", filter.name);
-            self.branch_filter = None;
-        }
-        let filter = self.branch_filter.as_ref().map(|r| r.refname.clone());
-        self.oids = self.repo.commit_ids(filter.as_deref())?;
-        self.commits.clear();
-        self.rows.clear();
-        self.engine.reset();
-        self.uncommitted = self.repo.worktree_status().unwrap_or_default();
-        self.detail_cache.clear();
-        self.load_next_chunk()?;
+        let mut data = self.prepare_reload()?;
+        Self::load_staged_chunk(&self.repo, self.chunk_size, &mut data)?;
+        self.apply_reload(data);
         Ok(())
+    }
+
+    fn prepare_reload(&self) -> Result<ReloadData> {
+        let refs = self.repo.refs()?;
+        let mut branch_filter = self.branch_filter.clone();
+        let dropped_filter = branch_filter
+            .as_ref()
+            .filter(|filter| !refs.iter().any(|r| r.refname == filter.refname))
+            .map(|filter| filter.name.clone());
+        if dropped_filter.is_some() {
+            branch_filter = None;
+        }
+        let filter = branch_filter.as_ref().map(|r| r.refname.as_str());
+        let oids = self.repo.commit_ids(filter)?;
+        let uncommitted = self.repo.worktree_status()?;
+        Ok(ReloadData {
+            ref_map: GitRepo::ref_map(&refs),
+            refs,
+            oids,
+            commits: Vec::new(),
+            rows: Vec::new(),
+            engine: LayoutEngine::new(),
+            uncommitted,
+            branch_filter,
+            dropped_filter,
+        })
+    }
+
+    fn load_staged_chunk(repo: &GitRepo, chunk_size: usize, data: &mut ReloadData) -> Result<()> {
+        if data.commits.len() >= data.oids.len() {
+            return Ok(());
+        }
+        let start = data.commits.len();
+        let end = (start + chunk_size.max(1)).min(data.oids.len());
+        let chunk = repo.load_commits(&data.oids[start..end])?;
+        data.rows.extend(data.engine.process(&chunk));
+        data.commits.extend(chunk);
+        Ok(())
+    }
+
+    fn apply_reload(&mut self, data: ReloadData) {
+        self.refs = data.refs;
+        self.ref_map = data.ref_map;
+        self.oids = data.oids;
+        self.commits = data.commits;
+        self.rows = data.rows;
+        self.engine = data.engine;
+        self.uncommitted = data.uncommitted;
+        self.branch_filter = data.branch_filter;
+        self.detail_cache.clear();
+        if let Some(name) = data.dropped_filter {
+            self.status = format!("branch '{name}' is gone — showing all");
+        }
     }
 
     /// Reload after an external git change while keeping the user in place:
@@ -188,7 +244,19 @@ impl App {
         let prev = self.selected;
         let query = self.search.query.clone();
 
-        self.reload_data()?;
+        let mut data = self.prepare_reload()?;
+
+        if let Some(pos) = anchor
+            .as_deref()
+            .and_then(|id| data.oids.iter().position(|oid| oid == id))
+        {
+            while data.commits.len() <= pos && data.commits.len() < data.oids.len() {
+                Self::load_staged_chunk(&self.repo, self.chunk_size, &mut data)?;
+            }
+        } else {
+            Self::load_staged_chunk(&self.repo, self.chunk_size, &mut data)?;
+        }
+        self.apply_reload(data);
 
         let len = self.display_len();
         if len == 0 {
@@ -264,7 +332,13 @@ impl App {
     /// `.git`; fixes selection for the synthetic uncommitted row appearing or
     /// disappearing so the same commit stays under the cursor.
     fn refresh_worktree(&mut self) {
-        let fresh = self.repo.worktree_status().unwrap_or_default();
+        let fresh = match self.repo.worktree_status() {
+            Ok(fresh) => fresh,
+            Err(e) => {
+                self.status = format!("worktree refresh failed: {e:#}");
+                return;
+            }
+        };
         if fresh == self.uncommitted {
             return;
         }
@@ -422,9 +496,16 @@ impl App {
         if let Some(files) = self.detail_cache.get(&id) {
             return files.clone();
         }
-        let files = self.repo.commit_files(&id).unwrap_or_default();
-        self.detail_cache.put(id, files.clone());
-        files
+        match self.repo.commit_files(&id) {
+            Ok(files) => {
+                self.detail_cache.put(id, files.clone());
+                files
+            }
+            Err(e) => {
+                self.status = format!("details failed: {e:#}");
+                Vec::new()
+            }
+        }
     }
 
     fn toggle_focus(&mut self) {
@@ -462,6 +543,7 @@ impl App {
                     title: file.path.clone(),
                     lines,
                     scroll: 0,
+                    viewport_height: 1,
                 });
                 self.mode = Mode::Diff;
             }
@@ -616,7 +698,7 @@ impl App {
             self.mode = Mode::Normal;
             return;
         };
-        let max = diff.lines.len().saturating_sub(1);
+        let max = diff.lines.len().saturating_sub(diff.viewport_height);
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => {
                 self.diff = None;
@@ -664,10 +746,15 @@ impl App {
                 self.filter_selected = self.filter_selected.saturating_sub(1);
             }
             KeyCode::Enter => {
+                let previous_filter = self.branch_filter.clone();
+                let previous_selected = self.selected;
                 self.branch_filter = self.filter_choices[self.filter_selected].clone();
                 self.mode = Mode::Normal;
                 self.selected = 0;
                 if let Err(e) = self.reload() {
+                    self.branch_filter = previous_filter;
+                    self.selected = previous_selected;
+                    self.sync_list_state();
                     self.status = format!("reload failed: {e:#}");
                 }
             }
