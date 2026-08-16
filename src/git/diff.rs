@@ -27,6 +27,9 @@ impl GitRepo {
     /// Combined staged + unstaged + untracked changes (HEAD tree vs
     /// workdir-with-index) — the "Uncommitted changes" row.
     pub fn worktree_status(&self) -> Result<Vec<FileChange>> {
+        if self.inner.is_bare() {
+            return Ok(Vec::new());
+        }
         let mut diff = self.worktree_diff()?;
         diff.find_similar(None)?;
         collect_file_changes(&diff)

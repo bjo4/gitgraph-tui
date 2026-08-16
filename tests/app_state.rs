@@ -125,6 +125,16 @@ fn empty_repo_yields_an_empty_app() {
 }
 
 #[test]
+fn empty_bare_repo_can_open_as_a_history_viewer() {
+    let dir = tempfile::tempdir().unwrap();
+    git2::Repository::init_bare(dir.path()).unwrap();
+    let repo = GitRepo::discover(dir.path()).unwrap();
+    let app = App::new_at(repo, 10_000).expect("bare repositories have history but no worktree");
+    assert!(app.commits.is_empty());
+    assert!(app.uncommitted.is_empty());
+}
+
+#[test]
 fn load_errors_surface_in_status_instead_of_vanishing() {
     let (_f, mut app) = linear_app(6, 2);
     app.reload().unwrap();

@@ -2,7 +2,6 @@
 //! the UI layer only reads this struct.
 use std::collections::{BTreeSet, HashMap};
 use std::num::NonZeroUsize;
-use std::ops::Bound::{Excluded, Unbounded};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
@@ -14,6 +13,8 @@ use crate::git::GitRepo;
 use crate::git::types::{CommitId, CommitInfo, DiffLine, FileChange, RefInfo, RefKind};
 use crate::git::watch::Fingerprint;
 use crate::graph::{GraphRow, LayoutEngine};
+
+mod search;
 
 pub const DEFAULT_CHUNK: usize = 300;
 const DETAIL_CACHE_SIZE: usize = 50;
@@ -561,147 +562,6 @@ impl App {
                 self.mode = Mode::Diff;
             }
             Err(e) => self.status = format!("diff failed: {e:#}"),
-        }
-    }
-
-    fn matches_query(commit: &CommitInfo, q: &str) -> bool {
-        commit.summary.to_lowercase().contains(q)
-            || commit.message.to_lowercase().contains(q)
-            || commit.author_name.to_lowercase().contains(q)
-            || commit.id.starts_with(q)
-    }
-
-    /// Rebuild the match list for `q` over the loaded commits.
-    fn recompute_matches(&mut self, q: &str) {
-        if q.is_empty() {
-            self.search.matches.clear();
-            return;
-        }
-        let q = q.to_lowercase();
-        let off = self.uncommitted_offset();
-        self.search.matches = self
-            .commits
-            .iter()
-            .enumerate()
-            .filter(|(_, c)| Self::matches_query(c, &q))
-            .map(|(i, _)| i + off)
-            .collect();
-    }
-
-    fn handle_search_key(&mut self, key: KeyEvent) {
-        match key.code {
-            KeyCode::Esc => {
-                self.search.input.clear();
-                self.search.query.clear();
-                self.search.matches.clear();
-                self.mode = Mode::Normal;
-            }
-            KeyCode::Enter => {
-                self.search.query = self.search.input.clone();
-                let q = self.search.query.clone();
-                self.recompute_matches(&q);
-                let n = self.search.matches.len();
-                self.status = format!("{n} match{}", if n == 1 { "" } else { "es" });
-                self.mode = Mode::Normal;
-            }
-            KeyCode::Backspace => {
-                self.search.input.pop();
-                self.live_search();
-            }
-            KeyCode::Char(c) => {
-                self.search.input.push(c);
-                self.live_search();
-            }
-            _ => {}
-        }
-    }
-
-    /// Incremental search while typing: jump to the nearest match at or
-    /// after the cursor (wrapping to the first).
-    fn live_search(&mut self) {
-        let q = self.search.input.clone();
-        if q.is_empty() {
-            self.search.matches.clear();
-            return;
-        }
-        self.recompute_matches(&q);
-        let target = self
-            .search
-            .matches
-            .range(self.selected..)
-            .copied()
-            .next()
-            .or_else(|| self.search.matches.first().copied());
-        if let Some(i) = target {
-            self.jump_to(i);
-        }
-    }
-
-    fn jump_to(&mut self, i: usize) {
-        self.selected = i.min(self.display_len().saturating_sub(1));
-        self.file_selected = 0;
-        self.ensure_margin();
-        self.sync_list_state();
-    }
-
-    /// n/N. Forward search loads further chunks until a match appears
-    /// (spec: auto-continue); wraps only once everything is loaded.
-    fn next_match(&mut self, dir: isize) {
-        if self.search.query.is_empty() {
-            self.status = "no search query — press / first".to_string();
-            return;
-        }
-        loop {
-            let found = if dir > 0 {
-                self.search
-                    .matches
-                    .range((Excluded(self.selected), Unbounded))
-                    .copied()
-                    .next()
-            } else {
-                self.search
-                    .matches
-                    .range(..self.selected)
-                    .copied()
-                    .next_back()
-            };
-            if let Some(i) = found {
-                self.jump_to(i);
-                return;
-            }
-            if dir > 0 && !self.all_loaded() {
-                let before = self.commits.len();
-                if let Err(e) = self.load_next_chunk() {
-                    self.status = format!("load failed: {e:#}");
-                    return;
-                }
-                let off = self.uncommitted_offset();
-                let q = self.search.query.to_lowercase();
-                let fresh: BTreeSet<usize> = self.commits[before..]
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, c)| Self::matches_query(c, &q))
-                    .map(|(i, _)| before + i + off)
-                    .collect();
-                self.search.matches.extend(fresh);
-                continue; // re-check with the extended match list
-            }
-            // Fully loaded: wrap around.
-            let wrapped = if dir > 0 {
-                self.search.matches.first()
-            } else {
-                self.search.matches.last()
-            };
-            match wrapped {
-                Some(&i) => {
-                    self.jump_to(i);
-                    self.status = "search wrapped".to_string();
-                }
-                None => {
-                    self.status = format!("no matches for '{}'", self.search.query);
-                }
-            }
-            return;
         }
     }
 

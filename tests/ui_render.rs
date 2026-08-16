@@ -261,6 +261,15 @@ fn empty_repo_shows_a_placeholder_message_in_the_graph_panel() {
 }
 
 #[test]
+fn tiny_terminal_does_not_panic() {
+    let f = merge_fixture();
+    let mut app = app_of(&f);
+    for (width, height) in [(1, 1), (2, 2), (5, 3)] {
+        let _ = render_app(&mut app, width, height);
+    }
+}
+
+#[test]
 fn empty_repo_with_untracked_files_shows_hint_and_uncommitted_row() {
     let f = Fixture::new();
     f.write_file("first.txt", "hi\n");
