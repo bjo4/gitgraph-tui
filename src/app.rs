@@ -1,7 +1,8 @@
 //! Application state machine. All state changes flow through handle_key —
 //! the UI layer only reads this struct.
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::num::NonZeroUsize;
+use std::ops::Bound::{Excluded, Unbounded};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
@@ -16,10 +17,14 @@ use crate::graph::{GraphRow, LayoutEngine};
 
 pub const DEFAULT_CHUNK: usize = 300;
 const DETAIL_CACHE_SIZE: usize = 50;
-/// Idle ticks (~250 ms each) between worktree-status polls. The `.git`
-/// fingerprint is checked every tick; re-diffing the worktree is heavier, so
-/// it runs less often — enough to notice an unsaved edit within ~2 s.
+/// Idle ticks (~250 ms each) between worktree-status polls. Re-diffing the
+/// worktree is heavier, so it runs less often — enough to notice an unsaved
+/// edit within ~2 s.
 const WORKTREE_POLL_TICKS: u32 = 8;
+/// Checking every tick recursively stats every loose ref. Once per second is
+/// responsive enough while avoiding constant filesystem traffic in repos with
+/// many branches and tags.
+const GIT_POLL_TICKS: u32 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -42,7 +47,7 @@ pub struct SearchState {
     /// Last confirmed query; n/N navigate its matches.
     pub query: String,
     /// Display-row indices matching `query` (or live `input` while typing).
-    pub matches: Vec<usize>,
+    pub matches: BTreeSet<usize>,
 }
 
 #[derive(Debug)]
@@ -108,6 +113,8 @@ pub struct App {
     failed_fp: Option<Fingerprint>,
     /// Idle ticks accrued since the last worktree-status poll.
     worktree_ticks: u32,
+    /// Idle ticks accrued since the last `.git` fingerprint scan.
+    git_ticks: u32,
 }
 
 impl App {
@@ -149,6 +156,7 @@ impl App {
             git_fp: Fingerprint::default(),
             failed_fp: None,
             worktree_ticks: 0,
+            git_ticks: 0,
         };
         app.reload()?; // also seeds git_fp via refresh_fingerprint
         Ok(app)
@@ -295,18 +303,22 @@ impl App {
         Ok(())
     }
 
-    /// Called once per idle tick from the main loop. Cheap `.git` fingerprint
-    /// check every time; a heavier worktree re-poll only every
-    /// `WORKTREE_POLL_TICKS`. A changed fingerprint takes precedence and does a
-    /// full soft-reload (which re-reads the worktree anyway).
+    /// Called once per idle tick from the main loop. The `.git` fingerprint
+    /// and heavier worktree diff are independently throttled; a changed Git
+    /// fingerprint performs a full soft-reload.
     pub fn on_tick(&mut self) {
+        self.worktree_ticks += 1;
+        if self.worktree_ticks >= WORKTREE_POLL_TICKS {
+            self.worktree_ticks = 0;
+            self.refresh_worktree();
+        }
+        self.git_ticks += 1;
+        if self.git_ticks < GIT_POLL_TICKS {
+            return;
+        }
+        self.git_ticks = 0;
         let fp = Fingerprint::snapshot(self.repo.git_dir(), self.repo.common_dir());
         if fp == self.git_fp {
-            self.worktree_ticks += 1;
-            if self.worktree_ticks >= WORKTREE_POLL_TICKS {
-                self.worktree_ticks = 0;
-                self.refresh_worktree();
-            }
             return;
         }
         // `.git` changed. If this exact state already failed to load, wait for
@@ -326,6 +338,7 @@ impl App {
         self.git_fp = Fingerprint::snapshot(self.repo.git_dir(), self.repo.common_dir());
         self.failed_fp = None;
         self.worktree_ticks = 0;
+        self.git_ticks = 0;
     }
 
     /// Re-diff the worktree only. Catches unsaved edits that don't touch
@@ -552,11 +565,10 @@ impl App {
     }
 
     fn matches_query(commit: &CommitInfo, q: &str) -> bool {
-        let q = q.to_lowercase();
-        commit.summary.to_lowercase().contains(&q)
-            || commit.message.to_lowercase().contains(&q)
-            || commit.author_name.to_lowercase().contains(&q)
-            || commit.id.starts_with(&q)
+        commit.summary.to_lowercase().contains(q)
+            || commit.message.to_lowercase().contains(q)
+            || commit.author_name.to_lowercase().contains(q)
+            || commit.id.starts_with(q)
     }
 
     /// Rebuild the match list for `q` over the loaded commits.
@@ -565,12 +577,13 @@ impl App {
             self.search.matches.clear();
             return;
         }
+        let q = q.to_lowercase();
         let off = self.uncommitted_offset();
         self.search.matches = self
             .commits
             .iter()
             .enumerate()
-            .filter(|(_, c)| Self::matches_query(c, q))
+            .filter(|(_, c)| Self::matches_query(c, &q))
             .map(|(i, _)| i + off)
             .collect();
     }
@@ -615,9 +628,9 @@ impl App {
         let target = self
             .search
             .matches
-            .iter()
+            .range(self.selected..)
             .copied()
-            .find(|&i| i >= self.selected)
+            .next()
             .or_else(|| self.search.matches.first().copied());
         if let Some(i) = target {
             self.jump_to(i);
@@ -642,16 +655,15 @@ impl App {
             let found = if dir > 0 {
                 self.search
                     .matches
-                    .iter()
+                    .range((Excluded(self.selected), Unbounded))
                     .copied()
-                    .find(|&i| i > self.selected)
+                    .next()
             } else {
                 self.search
                     .matches
-                    .iter()
-                    .rev()
+                    .range(..self.selected)
                     .copied()
-                    .find(|&i| i < self.selected)
+                    .next_back()
             };
             if let Some(i) = found {
                 self.jump_to(i);
@@ -664,8 +676,8 @@ impl App {
                     return;
                 }
                 let off = self.uncommitted_offset();
-                let q = self.search.query.clone();
-                let fresh: Vec<usize> = self.commits[before..]
+                let q = self.search.query.to_lowercase();
+                let fresh: BTreeSet<usize> = self.commits[before..]
                     .iter()
                     .enumerate()
                     .filter(|(_, c)| Self::matches_query(c, &q))

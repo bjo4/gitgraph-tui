@@ -10,6 +10,8 @@ use gitgraph_tui::git::GitRepo;
 /// Must match `WORKTREE_POLL_TICKS` in app.rs — the idle ticks between
 /// worktree-status polls.
 const WORKTREE_POLL_TICKS: usize = 8;
+/// Must match `GIT_POLL_TICKS` in app.rs.
+const GIT_POLL_TICKS: usize = 4;
 
 fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
@@ -63,7 +65,9 @@ fn on_tick_picks_up_a_new_commit_and_keeps_the_cursor_put() {
     );
     f.branch("main", fresh);
 
-    app.on_tick();
+    for _ in 0..GIT_POLL_TICKS {
+        app.on_tick();
+    }
 
     assert_eq!(app.total_len(), before + 1, "new commit shows up");
     assert_eq!(
@@ -93,7 +97,9 @@ fn auto_refresh_keeps_a_confirmed_search() {
         6_000,
     );
     f.branch("main", fresh);
-    app.on_tick();
+    for _ in 0..GIT_POLL_TICKS {
+        app.on_tick();
+    }
 
     assert_eq!(app.search.query, "commit", "query survives auto-refresh");
     assert_eq!(
@@ -160,7 +166,9 @@ fn auto_refresh_drops_a_filter_whose_branch_was_deleted() {
     let mut r = f.repo.find_reference("refs/heads/feature").unwrap();
     r.delete().unwrap();
 
-    app.on_tick();
+    for _ in 0..GIT_POLL_TICKS {
+        app.on_tick();
+    }
     assert!(
         app.branch_filter.is_none(),
         "a filter on a vanished branch falls back to all branches"

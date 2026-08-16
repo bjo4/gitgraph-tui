@@ -55,14 +55,25 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
         height: inner.height.saturating_sub(meta_h),
         ..inner
     };
-    let items: Vec<ListItem> = files.iter().map(|f| ListItem::new(file_line(f))).collect();
+    let visible_height = files_area.height as usize;
+    let offset = app
+        .file_selected
+        .saturating_add(1)
+        .saturating_sub(visible_height);
+    let items: Vec<ListItem> = files
+        .iter()
+        .skip(offset)
+        .take(visible_height)
+        .map(|f| ListItem::new(file_line(f)))
+        .collect();
     let focused = app.focus == Focus::Files;
     let list = List::new(items).highlight_style(if focused {
         Style::new().add_modifier(Modifier::REVERSED)
     } else {
         Style::new()
     });
-    let mut state = ListState::default().with_selected(Some(app.file_selected));
+    let mut state = ListState::default()
+        .with_selected((!files.is_empty()).then_some(app.file_selected.saturating_sub(offset)));
     frame.render_stateful_widget(list, files_area, &mut state);
 }
 

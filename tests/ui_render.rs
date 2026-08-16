@@ -271,6 +271,55 @@ fn empty_repo_with_untracked_files_shows_hint_and_uncommitted_row() {
 }
 
 #[test]
+fn graph_virtualization_keeps_the_bottom_selection_visible() {
+    let f = Fixture::new();
+    let mut parents = Vec::new();
+    for i in 0..30 {
+        let oid = f.commit(
+            &format!("commit {i}"),
+            &[("a.txt", &format!("{i}\n"))],
+            &[],
+            &parents,
+            1_000 + i,
+        );
+        parents = vec![oid];
+    }
+    f.branch("main", parents[0]);
+    f.set_head("refs/heads/main");
+    let mut app = app_of(&f);
+    app.handle_key(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Char('G'),
+        crossterm::event::KeyModifiers::NONE,
+    ));
+    let lines = render_app(&mut app, 70, 12);
+    assert!(lines.join("\n").contains("commit 0"));
+    assert!(app.list_state.offset() > 0);
+}
+
+#[test]
+fn detail_virtualization_keeps_the_selected_file_visible() {
+    let f = Fixture::new();
+    let names: Vec<String> = (0..20).map(|i| format!("f{i:02}.txt")).collect();
+    let adds: Vec<(&str, &str)> = names.iter().map(|name| (name.as_str(), "x\n")).collect();
+    let c1 = f.commit("many files", &adds, &[], &[], 1_000);
+    f.branch("main", c1);
+    f.set_head("refs/heads/main");
+    let mut app = app_of(&f);
+    app.handle_key(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Tab,
+        crossterm::event::KeyModifiers::NONE,
+    ));
+    for _ in 0..19 {
+        app.handle_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('j'),
+            crossterm::event::KeyModifiers::NONE,
+        ));
+    }
+    let lines = render_app(&mut app, 70, 20);
+    assert!(lines.join("\n").contains("f19.txt"));
+}
+
+#[test]
 fn branch_filter_popup_renders_over_the_graph() {
     let f = merge_fixture();
     let mut app = app_of(&f);

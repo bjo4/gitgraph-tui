@@ -20,7 +20,19 @@ const MAX_GRAPH_W: usize = 32;
 pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
     let graph_w = graph_width(app);
     let text_w = (area.width as usize).saturating_sub(2 + graph_w + 1); // borders + gap
-    let mut items: Vec<ListItem> = (0..app.display_len())
+    let visible_height = area.height.saturating_sub(2) as usize;
+    let display_len = app.display_len();
+    let mut offset = app.list_state.offset();
+    if display_len > 0 && visible_height > 0 {
+        if app.selected < offset {
+            offset = app.selected;
+        } else if app.selected >= offset + visible_height {
+            offset = app.selected + 1 - visible_height;
+        }
+        offset = offset.min(display_len.saturating_sub(visible_height));
+    }
+    let end = (offset + visible_height).min(display_len);
+    let mut items: Vec<ListItem> = (offset..end)
         .map(|i| ListItem::new(row_line(app, i, graph_w, text_w)))
         .collect();
     if app.commits.is_empty() {
@@ -45,7 +57,10 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
     let list = List::new(items)
         .block(Block::bordered().title(title))
         .highlight_style(Style::new().add_modifier(Modifier::REVERSED));
-    frame.render_stateful_widget(list, area, &mut app.list_state);
+    let mut visible_state = ratatui::widgets::ListState::default()
+        .with_selected((display_len > 0).then_some(app.selected.saturating_sub(offset)));
+    frame.render_stateful_widget(list, area, &mut visible_state);
+    *app.list_state.offset_mut() = offset;
 }
 
 fn graph_width(app: &App) -> usize {
