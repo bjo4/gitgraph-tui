@@ -28,7 +28,7 @@ fn commit_files_reports_kinds_and_line_counts() {
     let by_path = |p: &str| {
         files
             .iter()
-            .find(|c| c.path == p)
+            .find(|c| c.path == std::path::Path::new(p))
             .unwrap_or_else(|| panic!("missing {p}"))
     };
     assert_eq!(by_path("new.txt").kind, ChangeKind::Added);
@@ -74,11 +74,11 @@ fn renames_are_detected_when_content_is_identical() {
     let repo = GitRepo::discover(f.path()).unwrap();
     let files = repo.commit_files(&c2.to_string()).unwrap();
     assert_eq!(files.len(), 1);
-    assert_eq!(files[0].path, "new_name.txt");
+    assert_eq!(files[0].path, std::path::Path::new("new_name.txt"));
     assert_eq!(
         files[0].kind,
         ChangeKind::Renamed {
-            from: "old_name.txt".to_string()
+            from: "old_name.txt".into()
         }
     );
 }
@@ -194,7 +194,7 @@ fn merge_commit_diffs_against_its_first_parent_only() {
     f.set_head("refs/heads/main");
     let repo = GitRepo::discover(f.path()).unwrap();
     let files = repo.commit_files(&merge.to_string()).unwrap();
-    let paths: Vec<&str> = files.iter().map(|c| c.path.as_str()).collect();
+    let paths: Vec<&str> = files.iter().filter_map(|c| c.path.to_str()).collect();
     assert!(
         paths.contains(&"feat.txt"),
         "second-parent change appears vs first parent"
@@ -215,7 +215,7 @@ fn worktree_status_merges_staged_unstaged_and_untracked() {
     f.write_file("untracked.txt", "hello\n"); // untracked
     let repo = GitRepo::discover(f.path()).unwrap();
     let files = repo.worktree_status().unwrap();
-    let paths: Vec<&str> = files.iter().map(|c| c.path.as_str()).collect();
+    let paths: Vec<&str> = files.iter().filter_map(|c| c.path.to_str()).collect();
     assert!(paths.contains(&"tracked.txt"));
     assert!(paths.contains(&"untracked.txt"));
     let lines = repo.worktree_file_diff("tracked.txt").unwrap();
@@ -240,4 +240,27 @@ fn worktree_status_on_empty_repo_lists_untracked_files() {
     let files = repo.worktree_status().unwrap();
     assert_eq!(files.len(), 1);
     assert_eq!(files[0].kind, ChangeKind::Added);
+}
+
+#[cfg(unix)]
+#[test]
+fn non_utf8_worktree_path_round_trips_into_the_diff() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+    use std::path::PathBuf;
+
+    let f = Fixture::new();
+    let path = PathBuf::from(OsString::from_vec(b"invalid-\xff.txt".to_vec()));
+    std::fs::write(f.path().join(&path), "content\n").unwrap();
+    let repo = GitRepo::discover(f.path()).unwrap();
+
+    let files = repo.worktree_status().unwrap();
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].path, path);
+    let lines = repo.worktree_file_diff(&files[0].path).unwrap();
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.origin == '+' && line.content == "content")
+    );
 }

@@ -553,7 +553,7 @@ impl App {
         match lines {
             Ok(lines) => {
                 self.diff = Some(DiffState {
-                    title: file.path.clone(),
+                    title: file.path.to_string_lossy().into_owned(),
                     lines,
                     scroll: 0,
                     viewport_height: 1,

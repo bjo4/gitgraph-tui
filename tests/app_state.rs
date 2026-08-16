@@ -146,7 +146,7 @@ fn current_files_returns_commit_changes_and_caches_them() {
     let (_f, mut app) = linear_app(3, 300);
     let files = app.current_files();
     assert_eq!(files.len(), 1);
-    assert_eq!(files[0].path, "a.txt");
+    assert_eq!(files[0].path, std::path::Path::new("a.txt"));
     assert_eq!(files[0].kind, ChangeKind::Modified); // commit 2 rewrites a.txt
     let id = app.selected_commit().unwrap().id.clone();
     assert!(app.detail_cache.contains(&id), "result must be cached");
@@ -163,7 +163,7 @@ fn current_files_for_the_uncommitted_row_lists_worktree_changes() {
     let mut app = App::new_at(repo, 10_000).unwrap();
     let files = app.current_files();
     assert_eq!(files.len(), 1);
-    assert_eq!(files[0].path, "b.txt");
+    assert_eq!(files[0].path, std::path::Path::new("b.txt"));
 }
 
 #[test]

@@ -86,11 +86,11 @@ fn file_line(f: &crate::git::types::FileChange) -> Line<'static> {
     };
     let mut spans = vec![
         Span::styled(format!(" {letter} "), Style::new().fg(color)),
-        Span::raw(f.path.clone()),
+        Span::raw(f.path.to_string_lossy().into_owned()),
     ];
     if let ChangeKind::Renamed { from } = &f.kind {
         spans.push(Span::styled(
-            format!(" (from {from})"),
+            format!(" (from {})", from.to_string_lossy()),
             Style::new().fg(Color::DarkGray),
         ));
     }

@@ -18,10 +18,10 @@ impl GitRepo {
     }
 
     /// Unified diff of one file within a commit.
-    pub fn commit_file_diff(&self, id: &CommitId, path: &str) -> Result<Vec<DiffLine>> {
+    pub fn commit_file_diff(&self, id: &CommitId, path: impl AsRef<Path>) -> Result<Vec<DiffLine>> {
         let mut diff = self.commit_diff(id)?;
         diff.find_similar(None)?;
-        collect_diff_lines(&diff, Some(path))
+        collect_diff_lines(&diff, Some(path.as_ref()))
     }
 
     /// Combined staged + unstaged + untracked changes (HEAD tree vs
@@ -33,10 +33,10 @@ impl GitRepo {
     }
 
     /// Unified diff of one uncommitted file.
-    pub fn worktree_file_diff(&self, path: &str) -> Result<Vec<DiffLine>> {
+    pub fn worktree_file_diff(&self, path: impl AsRef<Path>) -> Result<Vec<DiffLine>> {
         let mut diff = self.worktree_diff()?;
         diff.find_similar(None)?;
-        collect_diff_lines(&diff, Some(path))
+        collect_diff_lines(&diff, Some(path.as_ref()))
     }
 
     fn commit_diff(&self, id: &CommitId) -> Result<Diff<'_>> {
@@ -75,7 +75,7 @@ fn collect_file_changes(diff: &Diff) -> Result<Vec<FileChange>> {
                 .new_file()
                 .path()
                 .or_else(|| delta.old_file().path())
-                .map(|p| p.display().to_string())
+                .map(Path::to_path_buf)
                 .unwrap_or_default();
             let kind = match delta.status() {
                 Delta::Added | Delta::Untracked => ChangeKind::Added,
@@ -84,7 +84,7 @@ fn collect_file_changes(diff: &Diff) -> Result<Vec<FileChange>> {
                     from: delta
                         .old_file()
                         .path()
-                        .map(|p| p.display().to_string())
+                        .map(Path::to_path_buf)
                         .unwrap_or_default(),
                 },
                 _ => ChangeKind::Modified,
@@ -120,7 +120,7 @@ fn collect_file_changes(diff: &Diff) -> Result<Vec<FileChange>> {
 }
 
 /// Flatten a Diff into displayable lines (hunk headers included).
-fn collect_diff_lines(diff: &Diff, exact_path: Option<&str>) -> Result<Vec<DiffLine>> {
+fn collect_diff_lines(diff: &Diff, exact_path: Option<&Path>) -> Result<Vec<DiffLine>> {
     let lines: RefCell<Vec<DiffLine>> = RefCell::new(Vec::new());
     diff.foreach(
         &mut |_delta, _| true,
@@ -170,15 +170,9 @@ fn collect_diff_lines(diff: &Diff, exact_path: Option<&str>) -> Result<Vec<DiffL
     Ok(lines.into_inner())
 }
 
-fn delta_matches(delta: &git2::DiffDelta<'_>, exact_path: Option<&str>) -> bool {
+fn delta_matches(delta: &git2::DiffDelta<'_>, exact_path: Option<&Path>) -> bool {
     exact_path.is_none_or(|path| {
-        delta
-            .new_file()
-            .path()
-            .is_some_and(|p| p == Path::new(path))
-            || delta
-                .old_file()
-                .path()
-                .is_some_and(|p| p == Path::new(path))
+        delta.new_file().path().is_some_and(|p| p == path)
+            || delta.old_file().path().is_some_and(|p| p == path)
     })
 }

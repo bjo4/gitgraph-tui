@@ -1,4 +1,5 @@
 //! Plain data types shared across layers. git2 types never leak past src/git/.
+use std::path::PathBuf;
 
 pub type CommitId = String; // 40-char hex
 
@@ -37,12 +38,12 @@ pub enum ChangeKind {
     Added,
     Modified,
     Deleted,
-    Renamed { from: String },
+    Renamed { from: PathBuf },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileChange {
-    pub path: String,
+    pub path: PathBuf,
     pub kind: ChangeKind,
     pub additions: usize,
     pub deletions: usize,
