@@ -52,7 +52,7 @@ Downloads the prebuilt binary for your platform from the latest GitHub
 release, verifies its sha256, and installs to `~/.local/bin`.
 
 - Choose the directory: `GITGRAPH_INSTALL_DIR=/usr/local/bin curl ... | sh`
-- Pin a version: `GITGRAPH_VERSION=v0.2.0 curl ... | sh`
+- Pin a version: `GITGRAPH_VERSION=v0.2.1 curl ... | sh`
 - No prebuilt binary for your platform? The script falls back to
   `cargo install` automatically (needs [Rust](https://rustup.rs)).
 
