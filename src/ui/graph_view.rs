@@ -13,6 +13,7 @@ use crate::ui::util::{pad_to_width, relative_time, truncate_width};
 use crate::ui::{lane_color, ref_style};
 
 const AUTHOR_W: usize = 12;
+const HASH_W: usize = 7;
 const TIME_W: usize = 5;
 /// Graph column cap: beyond 16 lanes the graph is unreadable anyway.
 const MAX_GRAPH_W: usize = 32;
@@ -99,7 +100,7 @@ fn row_line(app: &App, i: usize, graph_w: usize, text_w: usize) -> Line<'static>
     }
     spans.push(Span::raw(" "));
     // Ref labels, then the summary in whatever width is left.
-    let mut left = text_w.saturating_sub(AUTHOR_W + 1 + TIME_W);
+    let mut left = text_w.saturating_sub(AUTHOR_W + 1 + HASH_W + 1 + TIME_W);
     if let Some(refs) = app.ref_map.get(&commit.id) {
         for r in refs {
             let label = format!("[{}] ", r.name);
@@ -122,6 +123,11 @@ fn row_line(app: &App, i: usize, graph_w: usize, text_w: usize) -> Line<'static>
     let dim = Style::new().fg(Color::DarkGray);
     spans.push(Span::styled(
         pad_to_width(&truncate_width(&commit.author_name, AUTHOR_W), AUTHOR_W),
+        dim,
+    ));
+    spans.push(Span::raw(" "));
+    spans.push(Span::styled(
+        pad_to_width(&commit.short_id, HASH_W),
         dim,
     ));
     spans.push(Span::raw(" "));

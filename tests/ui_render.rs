@@ -79,6 +79,10 @@ fn graph_rows_show_dots_labels_summary_author_and_age() {
     assert!(all.contains("merge feature"), "summary renders");
     assert!(all.contains("Test Author"), "author renders");
     assert!(
+        all.contains(&app.commits[0].short_id),
+        "short hash renders in the list"
+    );
+    assert!(
         all.contains("2h"),
         "relative age renders (c2/c1 rows are 8_000-9_000s old = 2h)"
     );
