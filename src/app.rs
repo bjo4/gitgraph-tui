@@ -10,7 +10,9 @@ use lru::LruCache;
 use ratatui::widgets::ListState;
 
 use crate::git::GitRepo;
-use crate::git::types::{CommitId, CommitInfo, DiffLine, FileChange, RefInfo, RefKind};
+use crate::git::types::{
+    BranchChanges, CommitId, CommitInfo, DiffLine, FileChange, RefInfo, RefKind,
+};
 use crate::git::watch::Fingerprint;
 use crate::graph::{GraphRow, LayoutEngine};
 
@@ -33,12 +35,19 @@ pub enum Mode {
     Search,
     Diff,
     BranchFilter,
+    BranchChanges,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
     Commits,
     Files,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BranchChangesFocus {
+    Files,
+    Diff,
 }
 
 #[derive(Debug, Default)]
@@ -58,6 +67,23 @@ pub struct DiffState {
     pub scroll: usize,
     /// Visible content rows, updated by the renderer after terminal resizes.
     pub viewport_height: usize,
+}
+
+#[derive(Debug)]
+pub struct BranchChangesState {
+    pub branch_name: String,
+    pub entries: Vec<BranchChangeEntry>,
+    pub selected: usize,
+    pub focus: BranchChangesFocus,
+    pub diff_lines: Vec<DiffLine>,
+    pub diff_scroll: usize,
+    pub diff_viewport_height: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct BranchChangeEntry {
+    pub staged: bool,
+    pub file: FileChange,
 }
 
 /// Fully staged repository data. Reloads build this off to the side so a
@@ -93,6 +119,7 @@ pub struct App {
     pub mode: Mode,
     pub search: SearchState,
     pub diff: Option<DiffState>,
+    pub branch_changes: Option<BranchChangesState>,
     pub branch_filter: Option<RefInfo>,
     /// Branch-filter popup rows; None entry = "All branches".
     pub filter_choices: Vec<Option<RefInfo>>,
@@ -144,6 +171,7 @@ impl App {
             mode: Mode::Normal,
             search: SearchState::default(),
             diff: None,
+            branch_changes: None,
             branch_filter: None,
             filter_choices: Vec::new(),
             filter_selected: 0,
@@ -172,6 +200,7 @@ impl App {
         self.search.input.clear();
         self.search.query.clear();
         self.search.matches.clear();
+        self.branch_changes = None;
         self.selected = self.selected.min(self.display_len().saturating_sub(1));
         self.file_selected = 0;
         self.sync_list_state();
@@ -463,6 +492,7 @@ impl App {
             Mode::Search => self.handle_search_key(key),
             Mode::Diff => self.handle_diff_key(key),
             Mode::BranchFilter => self.handle_filter_key(key),
+            Mode::BranchChanges => self.handle_branch_changes_key(key),
         }
     }
 
@@ -492,6 +522,7 @@ impl App {
             (_, KeyCode::Char('g')) => self.select_top(),
             (_, KeyCode::Char('G')) => self.select_bottom(),
             (_, KeyCode::Char('b')) => self.open_branch_filter(),
+            (_, KeyCode::Char('c')) => self.open_branch_changes(),
             (_, KeyCode::Char('r')) => match self.reload() {
                 Ok(()) => self.status = "reloaded".to_string(),
                 Err(e) => self.status = format!("reload failed: {e:#}"),
@@ -584,6 +615,156 @@ impl App {
         }
     }
 
+    fn open_branch_changes(&mut self) {
+        let Some(branch) = self.branch_filter.clone() else {
+            self.status = "branch changes require a branch filter".to_string();
+            return;
+        };
+        match self.repo.branch_changes(&branch) {
+            Ok(BranchChanges {
+                branch_name,
+                staged,
+                unstaged,
+            }) => {
+                let entries = staged
+                    .into_iter()
+                    .map(|file| BranchChangeEntry { staged: true, file })
+                    .chain(
+                        unstaged
+                            .into_iter()
+                            .map(|file| BranchChangeEntry { staged: false, file }),
+                    )
+                    .collect();
+                self.branch_changes = Some(BranchChangesState {
+                    branch_name,
+                    entries,
+                    selected: 0,
+                    focus: BranchChangesFocus::Files,
+                    diff_lines: Vec::new(),
+                    diff_scroll: 0,
+                    diff_viewport_height: 1,
+                });
+                self.reload_branch_changes_diff();
+                self.mode = Mode::BranchChanges;
+            }
+            Err(e) => self.status = format!("changes failed: {e:#}"),
+        }
+    }
+
+    fn reload_branch_changes_diff(&mut self) {
+        let Some(branch) = self.branch_filter.clone() else {
+            self.branch_changes = None;
+            self.mode = Mode::Normal;
+            self.status = "branch filter cleared".to_string();
+            return;
+        };
+        let Some(changes) = self.branch_changes.as_mut() else {
+            return;
+        };
+        changes.selected = changes.selected.min(changes.entries.len().saturating_sub(1));
+        let Some(entry) = changes.entries.get(changes.selected) else {
+            changes.diff_lines.clear();
+            changes.diff_scroll = 0;
+            return;
+        };
+        match self
+            .repo
+            .branch_file_diff(&branch, entry.staged, &entry.file.path)
+        {
+            Ok(lines) => {
+                changes.diff_lines = lines;
+                changes.diff_scroll = 0;
+            }
+            Err(e) => {
+                changes.diff_lines.clear();
+                changes.diff_scroll = 0;
+                self.status = format!("changes diff failed: {e:#}");
+            }
+        }
+    }
+
+    fn handle_branch_changes_key(&mut self, key: KeyEvent) {
+        if self.branch_changes.is_none() {
+            self.mode = Mode::Normal;
+            return;
+        }
+        match key.code {
+            KeyCode::Char('q') | KeyCode::Esc => {
+                self.branch_changes = None;
+                self.mode = Mode::Normal;
+            }
+            KeyCode::Tab => {
+                let changes = self.branch_changes.as_mut().unwrap();
+                changes.focus = match changes.focus {
+                    BranchChangesFocus::Files => BranchChangesFocus::Diff,
+                    BranchChangesFocus::Diff => BranchChangesFocus::Files,
+                };
+            }
+            KeyCode::Char('j') | KeyCode::Down => match self.branch_changes.as_ref().unwrap().focus {
+                BranchChangesFocus::Files => self.move_branch_changes_selection(1),
+                BranchChangesFocus::Diff => self.scroll_branch_changes_diff(1),
+            },
+            KeyCode::Char('k') | KeyCode::Up => match self.branch_changes.as_ref().unwrap().focus {
+                BranchChangesFocus::Files => self.move_branch_changes_selection(-1),
+                BranchChangesFocus::Diff => self.scroll_branch_changes_diff(-1),
+            },
+            KeyCode::Char('g') => match self.branch_changes.as_ref().unwrap().focus {
+                BranchChangesFocus::Files => {
+                    self.branch_changes.as_mut().unwrap().selected = 0;
+                    self.reload_branch_changes_diff();
+                }
+                BranchChangesFocus::Diff => self.branch_changes.as_mut().unwrap().diff_scroll = 0,
+            },
+            KeyCode::Char('G') => match self.branch_changes.as_ref().unwrap().focus {
+                BranchChangesFocus::Files => {
+                    let last = self
+                        .branch_changes
+                        .as_ref()
+                        .unwrap()
+                        .entries
+                        .len()
+                        .saturating_sub(1);
+                    self.branch_changes.as_mut().unwrap().selected = last;
+                    self.reload_branch_changes_diff();
+                }
+                BranchChangesFocus::Diff => {
+                    let max = self
+                        .branch_changes
+                        .as_ref()
+                        .unwrap()
+                        .diff_lines
+                        .len()
+                        .saturating_sub(self.branch_changes.as_ref().unwrap().diff_viewport_height);
+                    self.branch_changes.as_mut().unwrap().diff_scroll = max;
+                }
+            },
+            _ => {}
+        }
+    }
+
+    fn move_branch_changes_selection(&mut self, delta: isize) {
+        let Some(changes) = self.branch_changes.as_mut() else {
+            return;
+        };
+        let len = changes.entries.len();
+        if len == 0 {
+            return;
+        }
+        changes.selected = (changes.selected as isize + delta).clamp(0, len as isize - 1) as usize;
+        self.reload_branch_changes_diff();
+    }
+
+    fn scroll_branch_changes_diff(&mut self, delta: isize) {
+        let Some(changes) = self.branch_changes.as_mut() else {
+            return;
+        };
+        let max = changes
+            .diff_lines
+            .len()
+            .saturating_sub(changes.diff_viewport_height);
+        changes.diff_scroll = (changes.diff_scroll as isize + delta).clamp(0, max as isize) as usize;
+    }
+
     fn open_branch_filter(&mut self) {
         let mut choices: Vec<Option<RefInfo>> = vec![None];
         choices.extend(
@@ -621,6 +802,7 @@ impl App {
                 let previous_filter = self.branch_filter.clone();
                 let previous_selected = self.selected;
                 self.branch_filter = self.filter_choices[self.filter_selected].clone();
+                self.branch_changes = None;
                 self.mode = Mode::Normal;
                 self.selected = 0;
                 if let Err(e) = self.reload() {

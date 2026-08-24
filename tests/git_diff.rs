@@ -242,6 +242,80 @@ fn worktree_status_on_empty_repo_lists_untracked_files() {
     assert_eq!(files[0].kind, ChangeKind::Added);
 }
 
+#[test]
+fn branch_changes_split_staged_and_unstaged_worktree_changes() {
+    let f = Fixture::new();
+    let base = f.commit(
+        "base",
+        &[("staged.txt", "old\n"), ("unstaged.txt", "before\n")],
+        &[],
+        &[],
+        1_000,
+    );
+    f.branch("feature", base);
+    f.set_head("refs/heads/feature");
+    f.write_file("staged.txt", "new staged\n");
+    {
+        let mut index = f.repo.index().unwrap();
+        index.add_path(std::path::Path::new("staged.txt")).unwrap();
+        index.write().unwrap();
+    }
+    f.write_file("unstaged.txt", "new unstaged\n");
+    f.write_file("untracked.txt", "hello\n");
+    let repo = GitRepo::discover(f.path()).unwrap();
+    let branch = repo
+        .refs()
+        .unwrap()
+        .into_iter()
+        .find(|r| r.refname == "refs/heads/feature")
+        .unwrap();
+
+    let changes = repo.branch_changes(&branch).unwrap();
+    assert_eq!(changes.branch_name, "feature");
+    assert_eq!(changes.staged.len(), 1);
+    assert_eq!(changes.staged[0].path, std::path::Path::new("staged.txt"));
+    assert!(
+        changes
+            .unstaged
+            .iter()
+            .any(|f| f.path == std::path::Path::new("unstaged.txt"))
+    );
+    assert!(
+        changes
+            .unstaged
+            .iter()
+            .any(|f| f.path == std::path::Path::new("untracked.txt"))
+    );
+}
+
+#[test]
+fn branch_file_diff_reads_staged_and_unstaged_sources_separately() {
+    let f = Fixture::new();
+    let base = f.commit("base", &[("a.txt", "old\n")], &[], &[], 1_000);
+    f.branch("feature", base);
+    f.set_head("refs/heads/feature");
+    f.write_file("a.txt", "staged\n");
+    {
+        let mut index = f.repo.index().unwrap();
+        index.add_path(std::path::Path::new("a.txt")).unwrap();
+        index.write().unwrap();
+    }
+    f.write_file("a.txt", "unstaged\n");
+    let repo = GitRepo::discover(f.path()).unwrap();
+    let branch = repo
+        .refs()
+        .unwrap()
+        .into_iter()
+        .find(|r| r.refname == "refs/heads/feature")
+        .unwrap();
+
+    let staged_lines = repo.branch_file_diff(&branch, true, "a.txt").unwrap();
+    assert!(staged_lines.iter().any(|l| l.origin == '+' && l.content == "staged"));
+    let unstaged_lines = repo.branch_file_diff(&branch, false, "a.txt").unwrap();
+    assert!(unstaged_lines.iter().any(|l| l.origin == '-' && l.content == "staged"));
+    assert!(unstaged_lines.iter().any(|l| l.origin == '+' && l.content == "unstaged"));
+}
+
 #[cfg(unix)]
 #[test]
 fn non_utf8_worktree_path_round_trips_into_the_diff() {

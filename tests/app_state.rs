@@ -4,6 +4,7 @@ use common::Fixture;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use gitgraph_tui::app::App;
 use gitgraph_tui::app::Focus;
+use gitgraph_tui::app::{BranchChangesFocus, Mode};
 use gitgraph_tui::git::GitRepo;
 use gitgraph_tui::git::types::ChangeKind;
 
@@ -213,8 +214,6 @@ fn moving_the_commit_cursor_resets_file_focus_state() {
     assert_eq!(app.file_selected, 0);
 }
 
-use gitgraph_tui::app::Mode;
-
 #[test]
 fn enter_on_a_file_opens_the_diff_and_esc_closes_it() {
     let f = Fixture::new();
@@ -337,6 +336,71 @@ fn esc_cancels_the_search_input() {
     assert_eq!(app.mode, Mode::Normal);
     assert!(app.search.input.is_empty());
     assert!(app.search.matches.is_empty());
+}
+
+#[test]
+fn c_opens_branch_changes_only_when_a_branch_filter_is_active() {
+    let (_f, mut app) = linear_app(3, 300);
+    app.handle_key(ch('c'));
+    assert_eq!(app.mode, Mode::Normal);
+    assert!(app.status.contains("branch changes require a branch filter"));
+}
+
+#[test]
+fn branch_changes_open_and_support_focus_switching_and_scrolling() {
+    let f = Fixture::new();
+    let base = f.commit("base", &[("shared.txt", "base\n")], &[], &[], 1_000);
+    f.branch("main", base);
+    f.branch("feature", base);
+    f.set_head("refs/heads/main");
+    f.write_file("shared.txt", "staged\n");
+    {
+        let mut index = f.repo.index().unwrap();
+        index.add_path(std::path::Path::new("shared.txt")).unwrap();
+        index.write().unwrap();
+    }
+    f.write_file("extra.txt", "one\ntwo\nthree\nfour\nfive\n");
+    let repo = GitRepo::discover(f.path()).unwrap();
+    let mut app = App::new_at(repo, 10_000).unwrap();
+
+    app.handle_key(ch('b'));
+    let pos = app
+        .filter_choices
+        .iter()
+        .position(|c| c.as_ref().is_some_and(|r| r.name == "feature"))
+        .unwrap();
+    for _ in 0..pos {
+        app.handle_key(ch('j'));
+    }
+    app.handle_key(key(KeyCode::Enter));
+
+    app.handle_key(ch('c'));
+    assert_eq!(app.mode, Mode::BranchChanges);
+    assert_eq!(app.branch_changes.as_ref().unwrap().focus, BranchChangesFocus::Files);
+    assert_eq!(app.branch_changes.as_ref().unwrap().entries.len(), 2);
+
+    let extra_pos = app
+        .branch_changes
+        .as_ref()
+        .unwrap()
+        .entries
+        .iter()
+        .position(|entry| entry.file.path == std::path::Path::new("extra.txt"))
+        .unwrap();
+    for _ in 0..extra_pos {
+        app.handle_key(ch('j'));
+    }
+    assert_eq!(app.branch_changes.as_ref().unwrap().selected, extra_pos);
+
+    app.handle_key(key(KeyCode::Tab));
+    assert_eq!(app.branch_changes.as_ref().unwrap().focus, BranchChangesFocus::Diff);
+    app.branch_changes.as_mut().unwrap().diff_viewport_height = 2;
+    app.handle_key(ch('j'));
+    assert_eq!(app.branch_changes.as_ref().unwrap().diff_scroll, 1);
+
+    app.handle_key(key(KeyCode::Esc));
+    assert_eq!(app.mode, Mode::Normal);
+    assert!(app.branch_changes.is_none());
 }
 
 #[test]

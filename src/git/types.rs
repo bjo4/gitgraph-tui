@@ -57,3 +57,10 @@ pub struct DiffLine {
     pub origin: char,
     pub content: String,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BranchChanges {
+    pub branch_name: String,
+    pub staged: Vec<FileChange>,
+    pub unstaged: Vec<FileChange>,
+}

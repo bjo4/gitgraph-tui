@@ -1,3 +1,4 @@
+pub mod branch_changes_view;
 pub mod detail_view;
 pub mod diff_view;
 pub mod graph_view;
@@ -51,6 +52,11 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         render_help(frame, help_area, app);
         return;
     }
+    if app.mode == Mode::BranchChanges {
+        branch_changes_view::render(frame, main_area, app);
+        render_help(frame, help_area, app);
+        return;
+    }
     let [graph_area, detail_area] =
         Layout::vertical([Constraint::Percentage(70), Constraint::Percentage(30)]).areas(main_area);
     graph_view::render(frame, graph_area, app);
@@ -66,9 +72,12 @@ fn render_help(frame: &mut Frame, area: Rect, app: &App) {
         Mode::Search => format!(" /{}▌  enter:confirm  esc:cancel", app.search.input),
         Mode::Diff => " j/k:scroll  g/G:top/bottom  esc:back".to_string(),
         Mode::BranchFilter => " j/k:choose  enter:apply  esc:close".to_string(),
+        Mode::BranchChanges => {
+            " j/k:move  tab:focus  g/G:top/bottom  esc:back".to_string()
+        }
         Mode::Normal if !app.status.is_empty() => format!(" {}", app.status),
         Mode::Normal => {
-            " j/k:move g/G:top/bot tab:focus enter:diff /:search n/N:next b:branches r:reload q:quit"
+            " j/k:move g/G:top/bot tab:focus enter:diff /:search n/N:next b:branches c:changes r:reload q:quit"
                 .to_string()
         }
     };

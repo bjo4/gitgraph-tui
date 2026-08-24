@@ -265,6 +265,71 @@ fn empty_repo_shows_a_placeholder_message_in_the_graph_panel() {
 }
 
 #[test]
+fn branch_changes_view_renders_split_panes() {
+    let f = Fixture::new();
+    let base = f.commit("base", &[("a.txt", "base\n")], &[], &[], 1_000);
+    f.branch("main", base);
+    f.branch("feature", base);
+    f.set_head("refs/heads/main");
+    f.write_file("a.txt", "staged\n");
+    {
+        let mut index = f.repo.index().unwrap();
+        index.add_path(std::path::Path::new("a.txt")).unwrap();
+        index.write().unwrap();
+    }
+    f.write_file("b.txt", "new\n");
+    let mut app = app_of(&f);
+
+    app.handle_key(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Char('b'),
+        crossterm::event::KeyModifiers::NONE,
+    ));
+    let pos = app
+        .filter_choices
+        .iter()
+        .position(|c| c.as_ref().is_some_and(|r| r.name == "feature"))
+        .unwrap();
+    for _ in 0..pos {
+        app.handle_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('j'),
+            crossterm::event::KeyModifiers::NONE,
+        ));
+    }
+    app.handle_key(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Enter,
+        crossterm::event::KeyModifiers::NONE,
+    ));
+    app.handle_key(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Char('c'),
+        crossterm::event::KeyModifiers::NONE,
+    ));
+    let b_pos = app
+        .branch_changes
+        .as_ref()
+        .unwrap()
+        .entries
+        .iter()
+        .position(|entry| entry.file.path == std::path::Path::new("b.txt"))
+        .unwrap();
+    for _ in 0..b_pos {
+        app.handle_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('j'),
+            crossterm::event::KeyModifiers::NONE,
+        ));
+    }
+
+    let lines = render_app(&mut app, 90, 18);
+    let all = lines.join("\n");
+    assert!(all.contains("changes feature"));
+    assert!(all.contains("Added"));
+    assert!(all.contains("Not added"));
+    assert!(all.contains("b.txt"));
+    assert!(all.contains("a.txt"));
+    assert!(all.contains("+new"));
+    assert!(!all.contains("all branches"), "branch changes view covers the graph");
+}
+
+#[test]
 fn tiny_terminal_does_not_panic() {
     let f = merge_fixture();
     let mut app = app_of(&f);
