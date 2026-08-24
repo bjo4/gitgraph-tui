@@ -162,14 +162,14 @@ fn render_cells(
 }
 
 /// Horizontal run from the commit's lane to `to`, ending in a curve glyph.
-/// Crossing a vertical becomes '┼' (keeping the vertical's color); existing
+/// Crossing a vertical keeps the vertical glyph (and its color); existing
 /// curves from earlier connectors are left intact.
 fn connector(cells: &mut [Cell], from: usize, to: usize, color: usize, end: char) {
     let (lo, hi) = (from.min(to), from.max(to));
     for cell in &mut cells[(2 * lo + 1)..(2 * hi)] {
         *cell = match cell.glyph {
-            '│' | '┼' => Cell {
-                glyph: '┼',
+            '│' => Cell {
+                glyph: '│',
                 color: cell.color,
             },
             ' ' | '─' => Cell {
@@ -262,7 +262,7 @@ mod tests {
     }
 
     #[test]
-    fn criss_cross_crossing_uses_the_cross_glyph() {
+    fn criss_cross_crossing_keeps_the_vertical_glyph() {
         // a=merge(c,d), b=merge(c,d) — the close of b's lane at c crosses
         // a's second-parent lane.
         let mut e = LayoutEngine::new();
@@ -272,7 +272,7 @@ mod tests {
             c("c", &[]),
             c("d", &[]),
         ]);
-        assert_eq!(glyphs(&rows), vec!["●─╮", "│ │ ●─╮", "●─┼─╯ │", "  ●───╯"]);
+        assert_eq!(glyphs(&rows), vec!["●─╮", "│ │ ●─╮", "●─│─╯ │", "  ●───╯"]);
     }
 
     #[test]
