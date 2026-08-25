@@ -110,7 +110,7 @@ fn uncommitted_row_renders_at_the_top() {
 fn help_line_lists_the_key_bindings() {
     let f = merge_fixture();
     let mut app = app_of(&f);
-    let lines = render_app(&mut app, 90, 16);
+    let lines = render_app(&mut app, 100, 16);
     let last = lines.last().unwrap();
     assert!(last.contains("q:quit"));
     assert!(last.contains("/:search"));
