@@ -12,24 +12,29 @@ commit 詳情、diff、搜尋——而且絕對不會寫入你的 repository。
 ```text
 ┌ my-repo — all branches — 128/500 commits ────────────────────────────┐
 │ ●    Uncommitted changes (1 files)                                   │
-│ ●─╮  [HEAD] [main] [v1.0] merge: dev into main       anna       2h   │
-│ ● │  fix: main work                                  anna       5h   │
-│ │ ●  [dev] feat: dev work                            ben        1d   │
-│ ●─╯  init                                            anna       2d   │
+│ ●─╮  [HEAD] [main] [v1.0] merge: dev into main anna a1b2c3d 2h       │
+│ ● │  fix: main work                       anna d4e5f6a 5h             │
+│ │ ●  [dev] feat: dev work                 ben  0f1e2d3 1d             │
+│ ●─╯  init                                 anna 9a8b7c6 2d             │
 ├──────────────────────────────────────────────────────────────────────┤
 │ commit a1b2c3d · anna <anna@example.com> · 2026-07-06 14:30          │
 │  M src/lib.rs  +12 -3                                                │
-└ j/k:move g/G:top/bot tab:focus enter:diff /:search b:branches q:quit ┘
+└ j/k:move g/G:top/bot tab:focus enter:diff /:search b:branches c:changes q:quit ┘
 ```
 
 ## 功能
 
-- **彩色分支圖** — lane 分配演算法，正確處理分叉、合併、octopus merge 與交錯歷史
+- **彩色分支圖** — lane 分配演算法，正確處理分叉、合併、octopus merge 與交錯歷史，
+  並保留清楚的交會線條
 - **Ref 標籤** — 本地/遠端分支、tag、HEAD 直接顯示在列上
+- **清單短 hash 欄位** — 每列在作者與相對時間旁顯示縮短版 commit hash
 - **Commit 詳情** — 完整訊息、作者、日期、變更檔案（+/- 行數）
 - **全螢幕 diff** — 逐檔、上色、可捲動
 - **增量搜尋** — 訊息/作者/hash；`n`/`N` 自動載入更舊的歷史直到下一個符合
 - **分支篩選** — 只看某條分支可達的 commit
+- **分支 changes 視圖** — 選擇特定 branch 篩選後可按 `c` 開啟分割畫面，
+  左側依 `Added` 與 `Not added` 顯示 staged 與 unstaged / untracked 檔案，
+  右側顯示所選檔案的 diff
 - **未提交變更** — 最新 commit 上方的即時狀態列
 - **即時自動更新** — 其他 terminal 的 commit、切換分支、branch/tag 變動，以及工作區
   檔案異動都會自動反映，無需按鍵；游標與搜尋條件在刷新後仍保留
@@ -86,6 +91,7 @@ gitgraph-tui ~/src/foo    # 指定路徑
 | `/` | 增量搜尋（訊息、作者、hash） |
 | `n` / `N` | 下一個 / 上一個符合（自動載入更舊的 commit） |
 | `b` | 依分支篩選 |
+| `c` | 在目前 branch 篩選下開啟 staged / unstaged changes 視圖 |
 | `r` | 強制完整重新載入（畫面本來就會自動更新）|
 | `Esc` / `q` | 返回 / 離開 |
 

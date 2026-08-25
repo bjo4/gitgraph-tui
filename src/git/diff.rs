@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use git2::{Delta, Diff, DiffOptions, Oid};
 
 use super::repo::GitRepo;
-use super::types::{ChangeKind, CommitId, DiffLine, FileChange};
+use super::types::{BranchChanges, ChangeKind, CommitId, DiffLine, FileChange, RefInfo};
 
 impl GitRepo {
     /// Files changed by a commit, diffed against its first parent
@@ -42,16 +42,35 @@ impl GitRepo {
         collect_diff_lines(&diff, Some(path.as_ref()))
     }
 
+    /// Worktree changes while a branch filter is active. The left pane groups
+    /// them into staged (`git add`ed) vs not-yet-staged changes.
+    pub fn branch_changes(&self, branch: &RefInfo) -> Result<BranchChanges> {
+        Ok(BranchChanges {
+            branch_name: branch.name.clone(),
+            staged: self.staged_status()?,
+            unstaged: self.unstaged_status()?,
+        })
+    }
+
+    /// Unified diff of one staged/unstaged file in the current worktree.
+    pub fn branch_file_diff(
+        &self,
+        _branch: &RefInfo,
+        staged: bool,
+        path: impl AsRef<Path>,
+    ) -> Result<Vec<DiffLine>> {
+        let mut diff = if staged {
+            self.staged_diff()?
+        } else {
+            self.unstaged_diff()?
+        };
+        diff.find_similar(None)?;
+        collect_diff_lines(&diff, Some(path.as_ref()))
+    }
+
     fn commit_diff(&self, id: &CommitId) -> Result<Diff<'_>> {
         let oid = Oid::from_str(id).context("invalid commit id")?;
-        let commit = self.inner.find_commit(oid)?;
-        let tree = commit.tree()?;
-        let parent_tree = commit.parent(0).ok().map(|p| p.tree()).transpose()?;
-        let mut opts = DiffOptions::new();
-        opts.context_lines(3);
-        Ok(self
-            .inner
-            .diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), Some(&mut opts))?)
+        self.diff_between_commits(self.inner.find_commit(oid)?.parent_id(0).ok(), oid)
     }
 
     fn worktree_diff(&self) -> Result<Diff<'_>> {
@@ -64,6 +83,58 @@ impl GitRepo {
         Ok(self
             .inner
             .diff_tree_to_workdir_with_index(head_tree.as_ref(), Some(&mut opts))?)
+    }
+
+    fn staged_status(&self) -> Result<Vec<FileChange>> {
+        if self.inner.is_bare() {
+            return Ok(Vec::new());
+        }
+        let mut diff = self.staged_diff()?;
+        diff.find_similar(None)?;
+        collect_file_changes(&diff)
+    }
+
+    fn unstaged_status(&self) -> Result<Vec<FileChange>> {
+        if self.inner.is_bare() {
+            return Ok(Vec::new());
+        }
+        let mut diff = self.unstaged_diff()?;
+        diff.find_similar(None)?;
+        collect_file_changes(&diff)
+    }
+
+    fn diff_between_commits(&self, base_oid: Option<Oid>, target_oid: Oid) -> Result<Diff<'_>> {
+        let target_tree = self.inner.find_commit(target_oid)?.tree()?;
+        let base_tree = base_oid
+            .map(|oid| self.inner.find_commit(oid)?.tree())
+            .transpose()?;
+        let mut opts = DiffOptions::new();
+        opts.context_lines(3);
+        Ok(self
+            .inner
+            .diff_tree_to_tree(base_tree.as_ref(), Some(&target_tree), Some(&mut opts))?)
+    }
+
+    fn staged_diff(&self) -> Result<Diff<'_>> {
+        let head_tree = self.inner.head().ok().and_then(|h| h.peel_to_tree().ok());
+        let index = self.inner.index()?;
+        let mut opts = DiffOptions::new();
+        opts.context_lines(3);
+        Ok(self
+            .inner
+            .diff_tree_to_index(head_tree.as_ref(), Some(&index), Some(&mut opts))?)
+    }
+
+    fn unstaged_diff(&self) -> Result<Diff<'_>> {
+        let index = self.inner.index()?;
+        let mut opts = DiffOptions::new();
+        opts.include_untracked(true)
+            .recurse_untracked_dirs(true)
+            .show_untracked_content(true)
+            .context_lines(3);
+        Ok(self
+            .inner
+            .diff_index_to_workdir(Some(&index), Some(&mut opts))?)
     }
 }
 

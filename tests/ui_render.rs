@@ -79,6 +79,10 @@ fn graph_rows_show_dots_labels_summary_author_and_age() {
     assert!(all.contains("merge feature"), "summary renders");
     assert!(all.contains("Test Author"), "author renders");
     assert!(
+        all.contains(&app.commits[0].short_id),
+        "short hash renders in the list"
+    );
+    assert!(
         all.contains("2h"),
         "relative age renders (c2/c1 rows are 8_000-9_000s old = 2h)"
     );
@@ -106,7 +110,7 @@ fn uncommitted_row_renders_at_the_top() {
 fn help_line_lists_the_key_bindings() {
     let f = merge_fixture();
     let mut app = app_of(&f);
-    let lines = render_app(&mut app, 90, 16);
+    let lines = render_app(&mut app, 100, 16);
     let last = lines.last().unwrap();
     assert!(last.contains("q:quit"));
     assert!(last.contains("/:search"));
@@ -258,6 +262,74 @@ fn empty_repo_shows_a_placeholder_message_in_the_graph_panel() {
     // "No commits yet" fallback (Task 9) would make a whole-buffer
     // assertion pass before this task's change.
     assert!(lines[1].contains("No commits yet"));
+}
+
+#[test]
+fn branch_changes_view_renders_split_panes() {
+    let f = Fixture::new();
+    let base = f.commit("base", &[("a.txt", "base\n")], &[], &[], 1_000);
+    f.branch("main", base);
+    f.branch("feature", base);
+    f.set_head("refs/heads/main");
+    f.write_file("a.txt", "staged\n");
+    {
+        let mut index = f.repo.index().unwrap();
+        index.add_path(std::path::Path::new("a.txt")).unwrap();
+        index.write().unwrap();
+    }
+    f.write_file("b.txt", "new\n");
+    let mut app = app_of(&f);
+
+    app.handle_key(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Char('b'),
+        crossterm::event::KeyModifiers::NONE,
+    ));
+    let pos = app
+        .filter_choices
+        .iter()
+        .position(|c| c.as_ref().is_some_and(|r| r.name == "feature"))
+        .unwrap();
+    for _ in 0..pos {
+        app.handle_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('j'),
+            crossterm::event::KeyModifiers::NONE,
+        ));
+    }
+    app.handle_key(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Enter,
+        crossterm::event::KeyModifiers::NONE,
+    ));
+    app.handle_key(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Char('c'),
+        crossterm::event::KeyModifiers::NONE,
+    ));
+    let b_pos = app
+        .branch_changes
+        .as_ref()
+        .unwrap()
+        .entries
+        .iter()
+        .position(|entry| entry.file.path == std::path::Path::new("b.txt"))
+        .unwrap();
+    for _ in 0..b_pos {
+        app.handle_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('j'),
+            crossterm::event::KeyModifiers::NONE,
+        ));
+    }
+
+    let lines = render_app(&mut app, 90, 18);
+    let all = lines.join("\n");
+    assert!(all.contains("changes feature"));
+    assert!(all.contains("Added"));
+    assert!(all.contains("Not added"));
+    assert!(all.contains("b.txt"));
+    assert!(all.contains("a.txt"));
+    assert!(all.contains("+new"));
+    assert!(
+        !all.contains("all branches"),
+        "branch changes view covers the graph"
+    );
 }
 
 #[test]

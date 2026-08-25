@@ -13,26 +13,31 @@ ever writes to your repository.
 ```text
 ┌ my-repo — all branches — 128/500 commits ────────────────────────────┐
 │ ●    Uncommitted changes (1 files)                                   │
-│ ●─╮  [HEAD] [main] [v1.0] merge: dev into main       anna       2h   │
-│ ● │  fix: main work                                  anna       5h   │
-│ │ ●  [dev] feat: dev work                            ben        1d   │
-│ ●─╯  init                                            anna       2d   │
+│ ●─╮  [HEAD] [main] [v1.0] merge: dev into main anna a1b2c3d 2h       │
+│ ● │  fix: main work                       anna d4e5f6a 5h             │
+│ │ ●  [dev] feat: dev work                 ben  0f1e2d3 1d             │
+│ ●─╯  init                                 anna 9a8b7c6 2d             │
 ├──────────────────────────────────────────────────────────────────────┤
 │ commit a1b2c3d · anna <anna@example.com> · 2026-07-06 14:30          │
 │  M src/lib.rs  +12 -3                                                │
-└ j/k:move g/G:top/bot tab:focus enter:diff /:search b:branches q:quit ┘
+└ j/k:move g/G:top/bot tab:focus enter:diff /:search b:branches c:changes q:quit ┘
 ```
 
 ## Features
 
 - **Colored branch graph** — lane-assignment layout handles forks, merges,
-  octopus merges, and criss-cross histories
+  octopus merges, and criss-cross histories, while keeping crossings readable
 - **Ref labels** — local / remote branches, tags, HEAD, right on the rows
+- **Short commit hashes in the list** — each row shows the abbreviated hash
+  beside the author and relative time
 - **Commit details** — full message, author, date, changed files with +/- counts
 - **Full-screen diffs** — per file, colored, scrollable
 - **Incremental search** — message / author / hash; `n`/`N` auto-load older
   history until the next match
 - **Branch filter** — show only what's reachable from one branch
+- **Changes view for filtered branches** — press `c` to open a split view of
+  the current worktree, grouped into staged (`Added`) and unstaged /
+  untracked (`Not added`) files, with a per-file diff on the right
 - **Uncommitted changes** — a live row above the newest commit
 - **Live auto-refresh** — external commits, checkouts, branch/tag edits, and
   worktree changes show up on their own, no keypress; your cursor and active
@@ -90,6 +95,7 @@ Tip: `alias gg=gitgraph-tui`
 | `/` | incremental search (message, author, hash) |
 | `n` / `N` | next / previous match (auto-loads older commits) |
 | `b` | filter by branch |
+| `c` | open the staged / unstaged changes view for the active branch filter |
 | `r` | force a full reload (the view also auto-refreshes on its own) |
 | `Esc` / `q` | back / quit |
 
