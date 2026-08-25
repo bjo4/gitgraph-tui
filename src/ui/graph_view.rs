@@ -126,10 +126,7 @@ fn row_line(app: &App, i: usize, graph_w: usize, text_w: usize) -> Line<'static>
         dim,
     ));
     spans.push(Span::raw(" "));
-    spans.push(Span::styled(
-        pad_to_width(&commit.short_id, HASH_W),
-        dim,
-    ));
+    spans.push(Span::styled(pad_to_width(&commit.short_id, HASH_W), dim));
     spans.push(Span::raw(" "));
     spans.push(Span::styled(relative_time(commit.timestamp, app.now), dim));
     Line::from(spans)

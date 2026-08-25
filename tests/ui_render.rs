@@ -326,7 +326,10 @@ fn branch_changes_view_renders_split_panes() {
     assert!(all.contains("b.txt"));
     assert!(all.contains("a.txt"));
     assert!(all.contains("+new"));
-    assert!(!all.contains("all branches"), "branch changes view covers the graph");
+    assert!(
+        !all.contains("all branches"),
+        "branch changes view covers the graph"
+    );
 }
 
 #[test]

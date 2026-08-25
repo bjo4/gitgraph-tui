@@ -343,7 +343,10 @@ fn c_opens_branch_changes_only_when_a_branch_filter_is_active() {
     let (_f, mut app) = linear_app(3, 300);
     app.handle_key(ch('c'));
     assert_eq!(app.mode, Mode::Normal);
-    assert!(app.status.contains("branch changes require a branch filter"));
+    assert!(
+        app.status
+            .contains("branch changes require a branch filter")
+    );
 }
 
 #[test]
@@ -376,7 +379,10 @@ fn branch_changes_open_and_support_focus_switching_and_scrolling() {
 
     app.handle_key(ch('c'));
     assert_eq!(app.mode, Mode::BranchChanges);
-    assert_eq!(app.branch_changes.as_ref().unwrap().focus, BranchChangesFocus::Files);
+    assert_eq!(
+        app.branch_changes.as_ref().unwrap().focus,
+        BranchChangesFocus::Files
+    );
     assert_eq!(app.branch_changes.as_ref().unwrap().entries.len(), 2);
 
     let extra_pos = app
@@ -393,7 +399,10 @@ fn branch_changes_open_and_support_focus_switching_and_scrolling() {
     assert_eq!(app.branch_changes.as_ref().unwrap().selected, extra_pos);
 
     app.handle_key(key(KeyCode::Tab));
-    assert_eq!(app.branch_changes.as_ref().unwrap().focus, BranchChangesFocus::Diff);
+    assert_eq!(
+        app.branch_changes.as_ref().unwrap().focus,
+        BranchChangesFocus::Diff
+    );
     app.branch_changes.as_mut().unwrap().diff_viewport_height = 2;
     app.handle_key(ch('j'));
     assert_eq!(app.branch_changes.as_ref().unwrap().diff_scroll, 1);

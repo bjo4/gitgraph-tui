@@ -629,11 +629,10 @@ impl App {
                 let entries = staged
                     .into_iter()
                     .map(|file| BranchChangeEntry { staged: true, file })
-                    .chain(
-                        unstaged
-                            .into_iter()
-                            .map(|file| BranchChangeEntry { staged: false, file }),
-                    )
+                    .chain(unstaged.into_iter().map(|file| BranchChangeEntry {
+                        staged: false,
+                        file,
+                    }))
                     .collect();
                 self.branch_changes = Some(BranchChangesState {
                     branch_name,
@@ -661,7 +660,9 @@ impl App {
         let Some(changes) = self.branch_changes.as_mut() else {
             return;
         };
-        changes.selected = changes.selected.min(changes.entries.len().saturating_sub(1));
+        changes.selected = changes
+            .selected
+            .min(changes.entries.len().saturating_sub(1));
         let Some(entry) = changes.entries.get(changes.selected) else {
             changes.diff_lines.clear();
             changes.diff_scroll = 0;
@@ -700,7 +701,8 @@ impl App {
                     BranchChangesFocus::Diff => BranchChangesFocus::Files,
                 };
             }
-            KeyCode::Char('j') | KeyCode::Down => match self.branch_changes.as_ref().unwrap().focus {
+            KeyCode::Char('j') | KeyCode::Down => match self.branch_changes.as_ref().unwrap().focus
+            {
                 BranchChangesFocus::Files => self.move_branch_changes_selection(1),
                 BranchChangesFocus::Diff => self.scroll_branch_changes_diff(1),
             },
@@ -762,7 +764,8 @@ impl App {
             .diff_lines
             .len()
             .saturating_sub(changes.diff_viewport_height);
-        changes.diff_scroll = (changes.diff_scroll as isize + delta).clamp(0, max as isize) as usize;
+        changes.diff_scroll =
+            (changes.diff_scroll as isize + delta).clamp(0, max as isize) as usize;
     }
 
     fn open_branch_filter(&mut self) {

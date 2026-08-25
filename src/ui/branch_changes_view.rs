@@ -43,9 +43,12 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
         .map(|entry| format!(" {} ", entry.file.path.to_string_lossy()))
         .unwrap_or_else(|| " no changes ".to_string());
     changes.diff_viewport_height = diff_area.height.saturating_sub(2) as usize;
-    changes.diff_scroll = changes
-        .diff_scroll
-        .min(changes.diff_lines.len().saturating_sub(changes.diff_viewport_height));
+    changes.diff_scroll = changes.diff_scroll.min(
+        changes
+            .diff_lines
+            .len()
+            .saturating_sub(changes.diff_viewport_height),
+    );
     let lines: Vec<Line> = if changes.diff_lines.is_empty() {
         vec![Line::from(Span::styled(
             "No changed content for this file",
@@ -147,10 +150,7 @@ fn push_section<'a, I>(
     if files.is_empty() {
         rows.push(FileRow {
             file_index: None,
-            line: Line::from(Span::styled(
-                "  (none)",
-                Style::new().fg(Color::DarkGray),
-            )),
+            line: Line::from(Span::styled("  (none)", Style::new().fg(Color::DarkGray))),
         });
         return;
     }

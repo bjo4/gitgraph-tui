@@ -310,10 +310,22 @@ fn branch_file_diff_reads_staged_and_unstaged_sources_separately() {
         .unwrap();
 
     let staged_lines = repo.branch_file_diff(&branch, true, "a.txt").unwrap();
-    assert!(staged_lines.iter().any(|l| l.origin == '+' && l.content == "staged"));
+    assert!(
+        staged_lines
+            .iter()
+            .any(|l| l.origin == '+' && l.content == "staged")
+    );
     let unstaged_lines = repo.branch_file_diff(&branch, false, "a.txt").unwrap();
-    assert!(unstaged_lines.iter().any(|l| l.origin == '-' && l.content == "staged"));
-    assert!(unstaged_lines.iter().any(|l| l.origin == '+' && l.content == "unstaged"));
+    assert!(
+        unstaged_lines
+            .iter()
+            .any(|l| l.origin == '-' && l.content == "staged")
+    );
+    assert!(
+        unstaged_lines
+            .iter()
+            .any(|l| l.origin == '+' && l.content == "unstaged")
+    );
 }
 
 #[cfg(unix)]
