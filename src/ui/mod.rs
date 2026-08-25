@@ -72,12 +72,10 @@ fn render_help(frame: &mut Frame, area: Rect, app: &App) {
         Mode::Search => format!(" /{}▌  enter:confirm  esc:cancel", app.search.input),
         Mode::Diff => " j/k:scroll  g/G:top/bottom  esc:back".to_string(),
         Mode::BranchFilter => " j/k:choose  enter:apply  esc:close".to_string(),
-        Mode::BranchChanges => {
-            " j/k:move  tab:focus  g/G:top/bottom  esc:back".to_string()
-        }
+        Mode::BranchChanges => " j/k:move  tab:focus  g/G:top/bottom  esc:back".to_string(),
         Mode::Normal if !app.status.is_empty() => format!(" {}", app.status),
         Mode::Normal => {
-            " j/k:move g/G:top/bot tab:focus enter:diff /:search n/N:next b:branches c:changes r:reload q:quit"
+            " j/k:move g/G:top/bot tab:focus enter:diff /:search n/N:next b:branch c:changes q:quit"
                 .to_string()
         }
     };
