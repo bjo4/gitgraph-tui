@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-09-05
+
+### Added
+
+- Staged / unstaged changes view for the active branch filter, reachable with
+  `c`, showing the files each side has moved.
+- Short commit hash column in the graph list.
+
+### Fixed
+
+- Vertical graph lines are no longer dropped where lanes cross.
+- Installer test now passes shellcheck, so the release workflow can build and
+  publish assets again.
+
 ## [0.2.1] - 2026-08-17
 
 ### Added
@@ -49,6 +63,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Chunked lazy loading (300 commits per chunk) for large repositories
 - Read-only by design: never mutates the repository
 
+[0.3.0]: https://github.com/bjo4/gitgraph-tui/releases/tag/v0.3.0
 [0.2.1]: https://github.com/bjo4/gitgraph-tui/releases/tag/v0.2.1
 [0.2.0]: https://github.com/bjo4/gitgraph-tui/releases/tag/v0.2.0
 [0.1.0]: https://github.com/bjo4/gitgraph-tui/releases/tag/v0.1.0
