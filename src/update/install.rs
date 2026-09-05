@@ -1,10 +1,12 @@
 //! Downloading, verifying and swapping in a new binary.
 
 use std::path::Path;
+use std::time::Duration;
 
 use anyhow::Context;
 use sha2::{Digest, Sha256};
 
+use crate::update::InstallStep;
 use crate::update::UpdateAction;
 use crate::update::check::REPO;
 
@@ -174,6 +176,130 @@ pub fn atomic_replace(new: &Path, target: &Path) -> std::io::Result<()> {
         std::fs::set_permissions(new, std::fs::Permissions::from_mode(0o755))?;
     }
     std::fs::rename(new, target)
+}
+
+/// A release tarball is a couple of megabytes; this only exists so a
+/// misbehaving server cannot make us read forever.
+pub const MAX_ASSET_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Download a URL into memory. Not unit-tested: it is the second and last
+/// network wrapper, and holds no logic of its own.
+pub fn download(url: &str, max_bytes: u64) -> anyhow::Result<Vec<u8>> {
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .user_agent(concat!("gitgraph-tui/", env!("CARGO_PKG_VERSION")))
+        .timeout_connect(Some(Duration::from_secs(3)))
+        .timeout_global(Some(Duration::from_secs(120)))
+        .build()
+        .into();
+    let mut response = agent
+        .get(url)
+        .call()
+        .with_context(|| format!("downloading {url}"))?;
+    response
+        .body_mut()
+        .with_config()
+        .limit(max_bytes)
+        .read_to_vec()
+        .with_context(|| format!("reading the body of {url}"))
+}
+
+pub fn stage_dir_name(pid: u32) -> String {
+    format!(".gitgraph-tui-update.{pid}")
+}
+
+/// Remove staging directories and write probes left behind by an interrupted
+/// update. Quitting mid-download is a normal thing for a user to do; this is
+/// how it gets tidied, rather than by fighting the shutdown path.
+pub fn clean_stale_stages(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if name.starts_with(".gitgraph-tui-update.") {
+            let _ = std::fs::remove_dir_all(entry.path());
+        } else if name.starts_with(".gitgraph-tui-write-probe.") {
+            // `dir_is_writable` removes its own probe, but if that unlink ever
+            // fails the file would sit in the user's bin directory for good.
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// Run the freshly extracted binary once before trusting it. The checksum
+/// already proved it is the file we published; this proves it can actually
+/// execute here, which a checksum cannot.
+pub fn verify_new_binary(path: &Path, tag: &str) -> anyhow::Result<()> {
+    let output = std::process::Command::new(path)
+        .arg("--version")
+        .output()
+        .with_context(|| format!("running {} --version", path.display()))?;
+    if !output.status.success() {
+        anyhow::bail!("the downloaded binary exited with {}", output.status);
+    }
+    let reported = String::from_utf8_lossy(&output.stdout);
+    let expected = tag.trim_start_matches('v');
+    if !reported.contains(expected) {
+        anyhow::bail!(
+            "the downloaded binary reports `{}`, not {tag}",
+            reported.trim()
+        );
+    }
+    Ok(())
+}
+
+/// The whole self-update, start to finish. Runs on a background thread; each
+/// phase is reported through `on_step` so the popup can say where it is.
+///
+/// `exe` must be the canonicalised path of the running binary.
+pub fn run(tag: &str, exe: &Path, on_step: &dyn Fn(InstallStep)) -> anyhow::Result<()> {
+    let dir = exe
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("cannot determine the install directory"))?;
+    let asset = asset_name(std::env::consts::OS, std::env::consts::ARCH, tag)
+        .ok_or_else(|| anyhow::anyhow!("no prebuilt binary for this platform"))?;
+
+    clean_stale_stages(dir);
+    // The staging directory lives beside the binary so the final rename stays
+    // on one filesystem; across devices it would fail with EXDEV.
+    let stage = dir.join(stage_dir_name(std::process::id()));
+    std::fs::create_dir_all(&stage).with_context(|| format!("creating {}", stage.display()))?;
+    let result = install_into(tag, &asset, &stage, exe, on_step);
+    let _ = std::fs::remove_dir_all(&stage);
+    result
+}
+
+fn install_into(
+    tag: &str,
+    asset: &str,
+    stage: &Path,
+    exe: &Path,
+    on_step: &dyn Fn(InstallStep),
+) -> anyhow::Result<()> {
+    on_step(InstallStep::Downloading);
+    let url = asset_url(tag, asset);
+    let archive = download(&url, MAX_ASSET_BYTES)?;
+    let sums = download(&format!("{url}.sha256"), 4096)?;
+
+    on_step(InstallStep::Verifying);
+    let expected = parse_sha256_file(&String::from_utf8_lossy(&sums))
+        .ok_or_else(|| anyhow::anyhow!("the release is missing a usable .sha256 file"))?;
+    let actual = sha256_hex(&archive);
+    if actual != expected {
+        // Never retry and never degrade: a mismatch means corrupted or
+        // tampered, and both deserve the same hard stop.
+        anyhow::bail!("checksum mismatch — aborting (expected {expected}, got {actual})");
+    }
+
+    on_step(InstallStep::Extracting);
+    let staged = stage.join(BINARY_NAME);
+    extract_binary(&archive, &staged)?;
+    verify_new_binary(&staged, tag)?;
+
+    on_step(InstallStep::Replacing);
+    atomic_replace(&staged, exe).with_context(|| format!("replacing {}", exe.display()))?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -499,5 +625,64 @@ gitgraph-tui-v0.3.0-x86_64-apple-darwin.tar.gz"
         };
         assert!(command.contains("install.sh"));
         assert!(command.contains("/usr/local/bin"));
+    }
+
+    #[test]
+    fn stage_directories_are_hidden_and_pid_scoped() {
+        let name = stage_dir_name(4242);
+        assert!(name.starts_with(".gitgraph-tui-update."));
+        assert!(name.ends_with("4242"));
+    }
+
+    #[test]
+    fn stale_stage_directories_are_swept_but_nothing_else_is() {
+        // A user who quit mid-download leaves one of these behind.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(".gitgraph-tui-update.111")).unwrap();
+        std::fs::create_dir(dir.path().join(".gitgraph-tui-update.222")).unwrap();
+        std::fs::write(dir.path().join("gitgraph-tui"), b"binary").unwrap();
+        std::fs::create_dir(dir.path().join("unrelated")).unwrap();
+        std::fs::write(dir.path().join(".gitgraph-tui-write-probe.333"), b"").unwrap();
+
+        clean_stale_stages(dir.path());
+
+        assert!(!dir.path().join(".gitgraph-tui-update.111").exists());
+        assert!(!dir.path().join(".gitgraph-tui-update.222").exists());
+        assert!(
+            dir.path().join("gitgraph-tui").exists(),
+            "the binary survives"
+        );
+        assert!(dir.path().join("unrelated").exists(), "other dirs survive");
+        assert!(!dir.path().join(".gitgraph-tui-write-probe.333").exists());
+    }
+
+    #[test]
+    fn sweeping_a_directory_with_no_stages_is_a_no_op() {
+        let dir = tempfile::tempdir().unwrap();
+        clean_stale_stages(dir.path());
+        clean_stale_stages(&dir.path().join("missing"));
+    }
+
+    #[test]
+    fn a_binary_that_reports_the_wrong_version_is_rejected() {
+        // Stand in for the real binary with a shell script, so this stays a
+        // pure filesystem test with no network and no release download.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let dir = tempfile::tempdir().unwrap();
+            let fake = dir.path().join("fake");
+            std::fs::write(&fake, "#!/bin/sh\necho 'gitgraph-tui 0.2.1'\n").unwrap();
+            std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+            assert!(verify_new_binary(&fake, "v0.3.0").is_err());
+            assert!(verify_new_binary(&fake, "v0.2.1").is_ok());
+        }
+    }
+
+    #[test]
+    fn a_binary_that_cannot_run_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("not-there");
+        assert!(verify_new_binary(&missing, "v0.3.0").is_err());
     }
 }
