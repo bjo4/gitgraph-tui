@@ -97,7 +97,41 @@ Tip: `alias gg=gitgraph-tui`
 | `b` | filter by branch |
 | `c` | open the staged / unstaged changes view for the active branch filter |
 | `r` | force a full reload (the view also auto-refreshes on its own) |
+| `u` | open the update notice when a newer release is available |
 | `Esc` / `q` | back / quit |
+
+## Update notifications
+
+On startup gitgraph-tui checks GitHub for the latest release by following the
+redirect on `/releases/latest` (it never calls `api.github.com`). The result
+is cached for 24 hours in `~/.cache/gitgraph-tui/update.txt` (or
+`$XDG_CACHE_HOME/gitgraph-tui/`, `~/Library/Caches/gitgraph-tui/` on macOS),
+so at most one such request happens per day. If `HOME` isn't set, the check
+is skipped entirely.
+
+The first time a new version is seen you get a popup; after that the help
+line shows `u:update` in place of `g/G:top/bot` (the `g`/`G` keys still work,
+they're just not listed while an update is pending — the Diff and Branch
+changes views keep showing `g/G` either way), and `u` reopens the popup at
+any time.
+
+Pressing `y` in the popup downloads the release asset for your platform,
+verifies the published SHA-256 checksum, extracts it, runs the new binary
+with `--version` to confirm it starts, and then atomically replaces the
+running executable. Restart gitgraph-tui to pick up the new version.
+
+Where an in-place update isn't possible — no prebuilt asset for your
+platform (e.g. Windows), a binary installed via `cargo install`, or an
+install directory you can't write to — the popup shows the command to run
+instead of an update button.
+
+To turn the check off:
+
+```sh
+export GITGRAPH_NO_UPDATE_CHECK=1   # or pass --no-update-check
+```
+
+The check is also skipped automatically when `CI` is set.
 
 ## How it works
 

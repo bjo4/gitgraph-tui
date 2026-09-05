@@ -14,11 +14,15 @@ categories = ["command-line-utilities", "development-tools"]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 crossterm = "0.29"
+flate2 = "1.1"
 git2 = { version = "0.21", default-features = false }
 lru = "0.18"
 ratatui = "0.30"
+sha2 = "0.11"
+tar = "0.4"
 time = { version = "0.3", features = ["formatting", "macros"] }
 unicode-width = "0.2"
+ureq = { version = "3.4", features = ["rustls"] }
 
 [dev-dependencies]
 tempfile = "3"

@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Startup update check against GitHub releases (via the `/releases/latest`
+  redirect, no `api.github.com` calls), cached for 24 hours. A popup offers
+  the new version the first time it is seen; `u` reopens it later, and the
+  help line shows `u:update` while an update is pending.
+- In-place self-update from the popup: downloads the release asset for the
+  running platform, verifies its published SHA-256 checksum, extracts it,
+  runs the new binary with `--version` to confirm it starts, then atomically
+  swaps the executable. Platforms without a prebuilt asset, cargo-installed
+  binaries, and unwritable install directories are shown the command to run
+  instead.
+- `--no-update-check` flag and `GITGRAPH_NO_UPDATE_CHECK` environment
+  variable to disable the check; it is also skipped when `CI` is set or
+  `HOME` is unset.
+
 ## [0.3.0] - 2026-09-05
 
 ### Added

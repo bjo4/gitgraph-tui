@@ -12,3 +12,13 @@ fn not_a_repo_exits_with_code_1_and_a_friendly_message() {
     assert!(stderr.contains("not a git repository"));
     assert!(!stderr.contains("panicked"), "must fail cleanly, not panic");
 }
+
+#[test]
+fn the_help_text_documents_the_update_opt_out() {
+    let output = Command::new(env!("CARGO_BIN_EXE_gitgraph-tui"))
+        .arg("--help")
+        .output()
+        .expect("run --help");
+    let help = String::from_utf8_lossy(&output.stdout);
+    assert!(help.contains("--no-update-check"));
+}

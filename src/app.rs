@@ -15,6 +15,7 @@ use crate::git::types::{
 };
 use crate::git::watch::Fingerprint;
 use crate::graph::{GraphRow, LayoutEngine};
+use crate::update::{InstallStep, UpdateAction, UpdateMessage, UpdateState};
 
 mod search;
 
@@ -36,6 +37,7 @@ pub enum Mode {
     Diff,
     BranchFilter,
     BranchChanges,
+    Update,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -131,6 +133,9 @@ pub struct App {
     pub load_margin: usize,
     /// Unix seconds used for relative times (injected in tests).
     pub now: i64,
+    /// Update-check state. Never populated by `App::new*` — `main.rs` injects
+    /// it via `attach_update`, so tests can never reach the network.
+    pub update: UpdateState,
     pub status: String,
     pub should_quit: bool,
     /// Last successfully-loaded `.git` fingerprint; a change triggers an auto
@@ -143,6 +148,8 @@ pub struct App {
     worktree_ticks: u32,
     /// Idle ticks accrued since the last `.git` fingerprint scan.
     git_ticks: u32,
+    /// Result channel for the background update check or install.
+    update_rx: Option<std::sync::mpsc::Receiver<UpdateMessage>>,
 }
 
 impl App {
@@ -180,6 +187,8 @@ impl App {
             chunk_size: DEFAULT_CHUNK,
             load_margin: 50,
             now,
+            update: UpdateState::Idle,
+            update_rx: None,
             status: String::new(),
             should_quit: false,
             git_fp: Fingerprint::default(),
@@ -337,6 +346,7 @@ impl App {
     /// and heavier worktree diff are independently throttled; a changed Git
     /// fingerprint performs a full soft-reload.
     pub fn on_tick(&mut self) {
+        self.drain_update_messages();
         self.worktree_ticks += 1;
         if self.worktree_ticks >= WORKTREE_POLL_TICKS {
             self.worktree_ticks = 0;
@@ -361,6 +371,103 @@ impl App {
         if let Err(e) = self.soft_reload() {
             self.status = format!("auto-refresh failed: {e:#}");
             self.failed_fp = Some(fp);
+        }
+    }
+
+    /// Hand the app the receiving end of a background update thread.
+    pub fn attach_update(&mut self, rx: std::sync::mpsc::Receiver<UpdateMessage>) {
+        self.update_rx = Some(rx);
+        self.update = UpdateState::Checking;
+    }
+
+    /// Fold one background message into the UI state.
+    ///
+    /// Public so the state machine can be tested without a thread or a
+    /// network — the tests drive this directly.
+    pub fn apply_update_message(&mut self, message: UpdateMessage) {
+        match message {
+            UpdateMessage::Available {
+                info,
+                already_prompted,
+            } => {
+                // Only interrupt for a version the user has not seen, and only
+                // while they are not in the middle of something.
+                let should_pop = !already_prompted && self.mode == Mode::Normal;
+                if should_pop {
+                    crate::update::mark_prompted(&info.latest);
+                    self.mode = Mode::Update;
+                }
+                self.update = UpdateState::Available(info);
+            }
+            UpdateMessage::Step(step) => self.update = UpdateState::Installing(step),
+            UpdateMessage::Done { latest } => self.update = UpdateState::Done { latest },
+            UpdateMessage::Failed { message } => self.update = UpdateState::Failed { message },
+        }
+    }
+
+    /// Re-open the update popup on demand (the `u` key).
+    pub fn open_update_popup(&mut self) {
+        if !matches!(self.update, UpdateState::Idle | UpdateState::Checking) {
+            self.mode = Mode::Update;
+        }
+    }
+
+    /// Start the real self-update.
+    ///
+    /// DANGER: this downloads a release asset and renames it over
+    /// `current_exe()`. In a test process that is the test binary itself, so no
+    /// test may ever send `y` while the state is `Available { action:
+    /// SelfUpdate }` — the existing tests build that state and stop short of
+    /// pressing the key on purpose.
+    fn start_update_install(&mut self) {
+        let UpdateState::Available(info) = &self.update else {
+            return;
+        };
+        // A manual action has no button to press; `y` is deliberately inert.
+        if info.action != UpdateAction::SelfUpdate {
+            return;
+        }
+        let tag = info.latest.clone();
+        self.update = UpdateState::Installing(InstallStep::Downloading);
+        self.update_rx = Some(crate::update::spawn_install(tag));
+    }
+
+    fn handle_update_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Char('y') => self.start_update_install(),
+            KeyCode::Char('n') | KeyCode::Char('q') | KeyCode::Esc => self.mode = Mode::Normal,
+            _ => {}
+        }
+    }
+
+    /// Non-blocking drain of the background update channel. Must stay
+    /// `try_recv` — the draw loop ticks every 250 ms and cannot block.
+    fn drain_update_messages(&mut self) {
+        let Some(rx) = &self.update_rx else { return };
+        let mut messages = Vec::new();
+        loop {
+            match rx.try_recv() {
+                Ok(message) => messages.push(message),
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.update_rx = None;
+                    // A check that found nothing closes its channel silently.
+                    if self.update == UpdateState::Checking {
+                        self.update = UpdateState::Idle;
+                    }
+                    // An install thread that died without reporting would
+                    // otherwise leave the popup stuck on "downloading…".
+                    if matches!(self.update, UpdateState::Installing(_)) {
+                        self.update = UpdateState::Failed {
+                            message: "the update stopped unexpectedly".to_string(),
+                        };
+                    }
+                    break;
+                }
+            }
+        }
+        for message in messages {
+            self.apply_update_message(message);
         }
     }
 
@@ -493,6 +600,7 @@ impl App {
             Mode::Diff => self.handle_diff_key(key),
             Mode::BranchFilter => self.handle_filter_key(key),
             Mode::BranchChanges => self.handle_branch_changes_key(key),
+            Mode::Update => self.handle_update_key(key),
         }
     }
 
@@ -523,6 +631,7 @@ impl App {
             (_, KeyCode::Char('G')) => self.select_bottom(),
             (_, KeyCode::Char('b')) => self.open_branch_filter(),
             (_, KeyCode::Char('c')) => self.open_branch_changes(),
+            (_, KeyCode::Char('u')) => self.open_update_popup(),
             (_, KeyCode::Char('r')) => match self.reload() {
                 Ok(()) => self.status = "reloaded".to_string(),
                 Err(e) => self.status = format!("reload failed: {e:#}"),

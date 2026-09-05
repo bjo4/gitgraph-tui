@@ -93,7 +93,37 @@ gitgraph-tui ~/src/foo    # 指定路徑
 | `b` | 依分支篩選 |
 | `c` | 在目前 branch 篩選下開啟 staged / unstaged changes 視圖 |
 | `r` | 強制完整重新載入（畫面本來就會自動更新）|
+| `u` | 有新版本時開啟更新提示 |
 | `Esc` / `q` | 返回 / 離開 |
+
+## 更新通知
+
+啟動時 gitgraph-tui 會向 GitHub 查詢最新 release——做法是讀取
+`/releases/latest` 的重導向（不會呼叫 `api.github.com`）。查詢結果會快取
+24 小時在 `~/.cache/gitgraph-tui/update.txt`（或 `$XDG_CACHE_HOME/gitgraph-tui/`，
+macOS 上是 `~/Library/Caches/gitgraph-tui/`），所以一天最多只會發出一次這樣的
+請求。若沒有設定 `HOME`，則完全不會檢查。
+
+同一個新版本第一次被偵測到時會跳出彈窗；之後提示列會把 `g/G:top/bot` 換成
+`u:update`（`g`/`G` 按鍵仍然可用，只是暫時沒列在提示列上——Diff 與 Branch
+changes 視圖的提示列仍會顯示 `g/G`），按 `u` 隨時可以重新開啟彈窗。
+
+在彈窗中按 `y` 會下載對應平台的 release 資產、驗證其公開的 SHA-256
+checksum、解壓縮、試跑新的執行檔並帶 `--version` 確認可以啟動，
+最後才原子性地換掉正在執行的執行檔。換完之後要重新啟動 gitgraph-tui
+才會套用新版本。
+
+以下情況無法就地更新，彈窗會改成顯示應執行的指令而不是更新按鈕：
+你的平台沒有預編譯資產（例如 Windows）、執行檔是用 `cargo install`
+安裝的、或安裝目錄沒有寫入權限。
+
+要完全關閉檢查：
+
+```sh
+export GITGRAPH_NO_UPDATE_CHECK=1   # 或加上 --no-update-check
+```
+
+偵測到 `CI` 環境變數時也會自動略過檢查。
 
 ## 運作原理
 

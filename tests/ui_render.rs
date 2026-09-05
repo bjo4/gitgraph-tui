@@ -1,6 +1,8 @@
 mod common;
 
 use common::Fixture;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use gitgraph_tui::update::{InstallStep, UpdateAction, UpdateInfo, UpdateMessage, UpdateState};
 use gitgraph_tui::{app::App, git::GitRepo, ui};
 use ratatui::{Terminal, backend::TestBackend};
 use unicode_width::UnicodeWidthStr;
@@ -413,4 +415,201 @@ fn branch_filter_popup_renders_over_the_graph() {
     assert!(all.contains("filter by branch"));
     assert!(all.contains("All branches"));
     assert!(all.contains("feature"));
+}
+
+fn key(code: KeyCode) -> KeyEvent {
+    KeyEvent::new(code, KeyModifiers::NONE)
+}
+
+fn available_app(f: &Fixture) -> App {
+    let mut app = app_of(f);
+    app.update = UpdateState::Available(UpdateInfo {
+        current: "0.2.1".to_string(),
+        latest: "v0.3.0".to_string(),
+        url: "https://github.com/bjo4/gitgraph-tui/releases/tag/v0.3.0".to_string(),
+        action: UpdateAction::SelfUpdate,
+    });
+    app
+}
+
+#[test]
+fn an_available_update_swaps_the_top_bottom_hint_for_the_update_hint() {
+    // The help line has ~3 columns of slack at width 100 (see commit bc6221f),
+    // so `u:update` has to take a seat rather than claim a new one.
+    let f = merge_fixture();
+    let mut app = available_app(&f);
+    let lines = render_app(&mut app, 100, 16);
+    let last = lines.last().unwrap();
+    assert!(last.contains("u:update"), "the update hint is shown");
+    assert!(last.contains("q:quit"), "quit must stay visible");
+    assert!(last.contains("/:search"), "search must stay visible");
+    assert!(
+        !last.contains("g/G:top/bot"),
+        "g/G gives up its slot while an update is pending"
+    );
+}
+
+#[test]
+fn an_idle_app_keeps_the_help_line_exactly_as_it_was() {
+    let f = merge_fixture();
+    let mut app = app_of(&f);
+    let lines = render_app(&mut app, 100, 16);
+    let last = lines.last().unwrap();
+    assert!(last.contains("g/G:top/bot"));
+    assert!(!last.contains("u:update"));
+}
+
+#[test]
+fn the_update_popup_shows_both_versions_and_the_keys() {
+    let f = merge_fixture();
+    let mut app = available_app(&f);
+    app.handle_key(key(KeyCode::Char('u')));
+    let all = render_app(&mut app, 100, 16).join("\n");
+    assert!(all.contains("0.2.1"), "the current version is shown");
+    assert!(all.contains("v0.3.0"), "the new version is shown");
+    assert!(all.contains("update now"));
+    assert!(all.contains("not now"));
+}
+
+#[test]
+fn a_manual_action_shows_the_command_instead_of_an_update_button() {
+    let f = merge_fixture();
+    let mut app = app_of(&f);
+    app.update = UpdateState::Available(UpdateInfo {
+        current: "0.2.1".to_string(),
+        latest: "v0.3.0".to_string(),
+        url: "https://example.com".to_string(),
+        action: UpdateAction::Manual {
+            command: "cargo install --git https://github.com/bjo4/gitgraph-tui".to_string(),
+        },
+    });
+    app.handle_key(key(KeyCode::Char('u')));
+    let all = render_app(&mut app, 100, 16).join("\n");
+    assert!(all.contains("cargo install"));
+    assert!(!all.contains("update now"), "no button that would fail");
+}
+
+#[test]
+fn install_progress_and_completion_render() {
+    let f = merge_fixture();
+    let mut app = available_app(&f);
+    app.handle_key(key(KeyCode::Char('u')));
+    app.apply_update_message(UpdateMessage::Step(InstallStep::Verifying));
+    assert!(
+        render_app(&mut app, 100, 16)
+            .join("\n")
+            .contains("verifying")
+    );
+    app.apply_update_message(UpdateMessage::Done {
+        latest: "v0.3.0".to_string(),
+    });
+    let all = render_app(&mut app, 100, 16).join("\n");
+    assert!(all.contains("restart"), "the user is told to restart");
+}
+
+#[test]
+fn a_failed_install_shows_its_reason() {
+    let f = merge_fixture();
+    let mut app = available_app(&f);
+    app.handle_key(key(KeyCode::Char('u')));
+    app.apply_update_message(UpdateMessage::Failed {
+        message: "checksum mismatch — aborting".to_string(),
+    });
+    let all = render_app(&mut app, 100, 16).join("\n");
+    assert!(all.contains("checksum mismatch"));
+}
+
+#[test]
+fn the_popup_survives_a_narrow_terminal_without_panicking() {
+    let f = merge_fixture();
+    let mut app = available_app(&f);
+    app.handle_key(key(KeyCode::Char('u')));
+    for width in [20u16, 32, 48, 80] {
+        let _ = render_app(&mut app, width, 10);
+    }
+}
+
+#[test]
+fn a_wrapping_url_does_not_push_the_dismiss_line_out_of_the_popup() {
+    // The URL is wider than the popup's inner width, so the popup has to grow
+    // by the wrapped rows. If height is computed before wrapping, "not now"
+    // falls outside the border and disappears.
+    let f = merge_fixture();
+    let mut app = app_of(&f);
+    app.update = UpdateState::Available(UpdateInfo {
+        current: "0.2.1".to_string(),
+        latest: "v0.3.0".to_string(),
+        url: "https://github.com/bjo4/gitgraph-tui/releases/tag/v0.3.0-with-a-very-long-suffix"
+            .to_string(),
+        action: UpdateAction::SelfUpdate,
+    });
+    app.handle_key(key(KeyCode::Char('u')));
+    let all = render_app(&mut app, 100, 24).join("\n");
+    assert!(
+        all.contains("not now"),
+        "the dismiss line was pushed out of the popup"
+    );
+    assert!(all.contains("update now"));
+}
+
+#[test]
+fn a_status_message_still_takes_the_whole_help_line_when_an_update_is_pending() {
+    // `status` is transient and always wins the line; the update hint returns
+    // on the next render once the status clears.
+    let f = merge_fixture();
+    let mut app = app_of(&f);
+    app.update = UpdateState::Available(UpdateInfo {
+        current: "0.2.1".to_string(),
+        latest: "v0.3.0".to_string(),
+        url: "https://example.com".to_string(),
+        action: UpdateAction::SelfUpdate,
+    });
+    app.status = "reloaded".to_string();
+    let lines = render_app(&mut app, 100, 16);
+    let last = lines.last().unwrap();
+    assert!(last.contains("reloaded"));
+    assert!(!last.contains("u:update"));
+}
+
+#[test]
+fn the_help_line_tells_the_three_update_outcomes_apart() {
+    // The popup can be dismissed with esc while the install runs, so the help
+    // line is where the outcome has to surface. Showing "u:update" after a
+    // failure would look identical to "a new version exists".
+    let f = merge_fixture();
+
+    let mut app = app_of(&f);
+    app.update = UpdateState::Available(UpdateInfo {
+        current: "0.2.1".to_string(),
+        latest: "v0.3.0".to_string(),
+        url: "https://example.com".to_string(),
+        action: UpdateAction::SelfUpdate,
+    });
+    let pending = render_app(&mut app, 100, 16).last().unwrap().clone();
+    assert!(pending.contains("u:update"));
+    assert!(pending.contains("q:quit"), "quit must stay visible");
+
+    let mut app = app_of(&f);
+    app.update = UpdateState::Done {
+        latest: "v0.3.0".to_string(),
+    };
+    let done = render_app(&mut app, 100, 16).last().unwrap().clone();
+    assert!(
+        done.contains("u:restart"),
+        "a finished update must not still say update"
+    );
+    assert!(!done.contains("u:update"));
+    assert!(done.contains("q:quit"));
+
+    let mut app = app_of(&f);
+    app.update = UpdateState::Failed {
+        message: "checksum mismatch".to_string(),
+    };
+    let failed = render_app(&mut app, 100, 16).last().unwrap().clone();
+    assert!(
+        failed.contains("u:failed"),
+        "a failed update must be distinguishable"
+    );
+    assert!(!failed.contains("u:update"));
+    assert!(failed.contains("q:quit"));
 }
