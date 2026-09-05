@@ -74,6 +74,9 @@ jobs:
           mkdir -p dist/pkg
           cp "target/${{ matrix.target }}/release/gitgraph-tui" dist/pkg/
           cp LICENSE README.md dist/pkg/
+          # Entry names must stay bare (`gitgraph-tui`, not `pkg/gitgraph-tui`).
+          # src/update/install.rs rejects entries containing a path separator,
+          # so archiving a directory here would break self-update silently.
           tar -C dist/pkg -czf "dist/${ASSET}" gitgraph-tui LICENSE README.md
           cd dist
           if command -v sha256sum >/dev/null 2>&1; then
