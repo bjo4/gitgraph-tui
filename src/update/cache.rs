@@ -81,9 +81,11 @@ pub fn store(path: &Path, cache: &Cache) {
 }
 
 /// True when the cached tag may be reused instead of hitting the network.
-/// A `now` earlier than `last_check` (a skewed clock) counts as stale.
+/// A `now` earlier than `last_check` (a skewed clock) counts as stale, and a
+/// corrupted `last_check` cannot overflow this — the cache file is data we do
+/// not control, so the arithmetic has to be total.
 pub fn is_fresh(cache: &Cache, now: i64) -> bool {
-    cache.latest.is_some() && (0..CACHE_TTL_SECS).contains(&(now - cache.last_check))
+    cache.latest.is_some() && (0..CACHE_TTL_SECS).contains(&now.saturating_sub(cache.last_check))
 }
 
 #[cfg(test)]
@@ -165,6 +167,28 @@ mod tests {
             prompted: None,
         };
         assert!(!is_fresh(&cache, 1_000_001));
+    }
+
+    #[test]
+    fn an_absurd_cached_timestamp_cannot_overflow_the_freshness_check() {
+        // `load` accepts anything i64 can parse, so a corrupted file can hold
+        // i64::MIN. Plain subtraction would panic here in a debug build.
+        let cache = Cache {
+            last_check: i64::MIN,
+            latest: Some("v0.3.0".to_string()),
+            prompted: None,
+        };
+        assert!(!is_fresh(&cache, 1_757_030_400));
+    }
+
+    #[test]
+    fn an_absurd_future_timestamp_is_stale_rather_than_fresh() {
+        let cache = Cache {
+            last_check: i64::MAX,
+            latest: Some("v0.3.0".to_string()),
+            prompted: None,
+        };
+        assert!(!is_fresh(&cache, 1_757_030_400));
     }
 
     #[test]
