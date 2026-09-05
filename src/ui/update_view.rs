@@ -109,6 +109,15 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
     if trimmed.is_empty() {
         return vec![text.to_string()];
     }
+    // The leading space is part of every row's budget, not something bolted
+    // on afterwards: wrapping to the full `width` and then prefixing row 0
+    // with a space made that row one column too wide, and the widget
+    // silently clipped its last character.
+    let width = if leading_space {
+        width.saturating_sub(1).max(1)
+    } else {
+        width
+    };
     let mut lines: Vec<String> = Vec::new();
     let mut current = String::new();
     for word in trimmed.split(' ').filter(|w| !w.is_empty()) {
@@ -151,7 +160,12 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
         lines.push(String::new());
     }
     if leading_space {
-        lines[0] = format!(" {}", lines[0]);
+        // The space is part of each row's budget, not something bolted on
+        // afterwards: adding it to an already-full row made row 0 one column
+        // too wide and the widget silently clipped its last character.
+        for line in &mut lines {
+            line.insert(0, ' ');
+        }
     }
     lines
 }
@@ -221,5 +235,28 @@ mod tests {
         assert_eq!(wrap_text("", 10), vec![String::new()]);
         let _ = wrap_text("hello world", 0);
         let _ = wrap_text("hello world", 1);
+    }
+
+    #[test]
+    fn wrapping_never_loses_or_duplicates_characters() {
+        // The bug this pins: a leading space was re-added to row 0 after
+        // wrapping, pushing it one column over the limit so the widget clipped
+        // its last character and the rendered URL was simply wrong.
+        let url = " https://github.com/bjo4/gitgraph-tui/releases/tag/v0.2.1";
+        for width in [10usize, 20, 40, 54] {
+            let rows = wrap_text(url, width);
+            let rejoined: String = rows.iter().map(|r| r.trim_start()).collect();
+            assert_eq!(
+                rejoined,
+                url.trim_start(),
+                "width {width}: wrapping lost or duplicated characters"
+            );
+            for row in &rows {
+                assert!(
+                    UnicodeWidthStr::width(row.as_str()) <= width,
+                    "width {width}: row {row:?} is too wide"
+                );
+            }
+        }
     }
 }
