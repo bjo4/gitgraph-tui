@@ -134,6 +134,16 @@ pub fn extract_binary(gz_bytes: &[u8], dest: &Path) -> anyhow::Result<()> {
         let Some(name) = path.to_str() else {
             continue;
         };
+        // Belt and braces. The invariant that actually protects us is that
+        // `dest` comes from the caller and an entry's own path is never used
+        // to build a write path, so nothing can land where we did not choose.
+        // These checks are defence in depth for a future refactor that reaches
+        // for `unpack_in` or similar.
+        //
+        // Their test coverage deliberately overlaps: on Unix every sample that
+        // trips the `..` or absolute-path clause also contains a separator, so
+        // removing either of those two clauses alone will not fail a test. Do
+        // not "simplify" them away on the strength of a green suite.
         if name.contains("..")
             || name.contains('/')
             || name.contains('\\')
@@ -220,16 +230,38 @@ mod tests {
 
     #[test]
     fn a_path_traversal_entry_is_refused() {
-        // The whole point of the guard: a crafted archive must not be able to
-        // write outside the temp directory we chose.
+        // The archive carries a `../../evil` entry alongside the real binary.
+        // Nesting the destination two directories deep means a successful
+        // escape would land at `outer/evil`, so the test can assert the
+        // escape did not happen rather than merely that `dest` looks right.
+        let outer = tempfile::tempdir().unwrap();
+        let nested = outer.path().join("a/b");
+        std::fs::create_dir_all(&nested).unwrap();
+        let escape_target = outer.path().join("evil");
+
         let gz = make_tar_gz(&[
             ("../../evil", b"pwned" as &[u8]),
             ("gitgraph-tui", b"legit"),
         ]);
-        let dir = tempfile::tempdir().unwrap();
-        let dest = dir.path().join("out");
+        let dest = nested.join("out");
         extract_binary(&gz, &dest).unwrap();
+
         assert_eq!(std::fs::read(&dest).unwrap(), b"legit");
+        assert!(
+            !escape_target.exists(),
+            "the `../../evil` entry escaped to {}",
+            escape_target.display()
+        );
+        let written: Vec<_> = std::fs::read_dir(&nested)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name())
+            .collect();
+        assert_eq!(
+            written.len(),
+            1,
+            "extraction wrote something other than the binary: {written:?}"
+        );
     }
 
     #[test]
