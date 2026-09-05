@@ -120,7 +120,12 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
             let mut piece_width = 0usize;
             for ch in word.chars() {
                 let cw = UnicodeWidthChar::width(ch).unwrap_or(1);
-                if piece_width + cw > width && !current.is_empty() {
+                // Only close out the current row once it is non-empty and
+                // adding `ch` would overflow it. A character is appended to
+                // an *empty* row unconditionally: an indivisible glyph wider
+                // than the whole width can't be split any further, so it is
+                // emitted alone by design rather than dropped or truncated.
+                if !current.is_empty() && piece_width + cw > width {
                     lines.push(std::mem::take(&mut current));
                     piece_width = 0;
                 }
@@ -161,5 +166,60 @@ fn centered(outer: Rect, w: u16, h: u16) -> Rect {
         y: outer.y + (outer.height - h) / 2,
         width: w,
         height: h,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_long_line_is_wrapped_to_the_given_width() {
+        let wrapped = wrap_text(
+            "https://github.com/bjo4/gitgraph-tui/releases/tag/v0.3.0",
+            20,
+        );
+        assert!(
+            wrapped.len() > 1,
+            "a 56-column URL must not stay on one row"
+        );
+        for row in &wrapped {
+            assert!(
+                UnicodeWidthStr::width(row.as_str()) <= 20,
+                "row {row:?} exceeds the width it was wrapped to"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unbreakable_token_is_hard_split_rather_than_overflowing() {
+        let long = "a".repeat(200);
+        let wrapped = wrap_text(&long, 10);
+        assert_eq!(wrapped.len(), 20);
+        for row in &wrapped {
+            assert!(UnicodeWidthStr::width(row.as_str()) <= 10);
+        }
+    }
+
+    #[test]
+    fn wide_glyphs_never_produce_a_row_wider_than_asked_for() {
+        // Two-column glyphs are where a naive character-at-a-time split
+        // overflows: the first character used to be pushed without checking.
+        for width in [1usize, 2, 3, 5] {
+            for row in wrap_text("測試更新視窗換行", width) {
+                let w = UnicodeWidthStr::width(row.as_str());
+                assert!(
+                    w <= width.max(2),
+                    "width {width}: row {row:?} is {w} columns"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn degenerate_widths_and_empty_input_do_not_hang_or_panic() {
+        assert_eq!(wrap_text("", 10), vec![String::new()]);
+        let _ = wrap_text("hello world", 0);
+        let _ = wrap_text("hello world", 1);
     }
 }

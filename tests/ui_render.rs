@@ -528,3 +528,45 @@ fn the_popup_survives_a_narrow_terminal_without_panicking() {
         let _ = render_app(&mut app, width, 10);
     }
 }
+
+#[test]
+fn a_wrapping_url_does_not_push_the_dismiss_line_out_of_the_popup() {
+    // The URL is wider than the popup's inner width, so the popup has to grow
+    // by the wrapped rows. If height is computed before wrapping, "not now"
+    // falls outside the border and disappears.
+    let f = merge_fixture();
+    let mut app = app_of(&f);
+    app.update = UpdateState::Available(UpdateInfo {
+        current: "0.2.1".to_string(),
+        latest: "v0.3.0".to_string(),
+        url: "https://github.com/bjo4/gitgraph-tui/releases/tag/v0.3.0-with-a-very-long-suffix"
+            .to_string(),
+        action: UpdateAction::SelfUpdate,
+    });
+    app.handle_key(key(KeyCode::Char('u')));
+    let all = render_app(&mut app, 100, 24).join("\n");
+    assert!(
+        all.contains("not now"),
+        "the dismiss line was pushed out of the popup"
+    );
+    assert!(all.contains("update now"));
+}
+
+#[test]
+fn a_status_message_still_takes_the_whole_help_line_when_an_update_is_pending() {
+    // `status` is transient and always wins the line; the update hint returns
+    // on the next render once the status clears.
+    let f = merge_fixture();
+    let mut app = app_of(&f);
+    app.update = UpdateState::Available(UpdateInfo {
+        current: "0.2.1".to_string(),
+        latest: "v0.3.0".to_string(),
+        url: "https://example.com".to_string(),
+        action: UpdateAction::SelfUpdate,
+    });
+    app.status = "reloaded".to_string();
+    let lines = render_app(&mut app, 100, 16);
+    let last = lines.last().unwrap();
+    assert!(last.contains("reloaded"));
+    assert!(!last.contains("u:update"));
+}
