@@ -185,6 +185,17 @@ gitgraph-tui-v0.3.0-x86_64-apple-darwin.tar.gz"
     }
 
     #[test]
+    fn sha256_zero_pads_bytes_below_0x10() {
+        // The canonical NIST vector for "abc". Its digest contains 0x01, 0x03
+        // and 0x00, so a formatter that drops the zero padding produces a
+        // shorter, different string and this assertion fails.
+        assert_eq!(
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[test]
     fn a_binary_inside_cargos_bin_directory_is_recognised() {
         let cargo_home = PathBuf::from("/opt/cargo");
         let home = PathBuf::from("/home/u");
@@ -264,6 +275,28 @@ gitgraph-tui-v0.3.0-x86_64-apple-darwin.tar.gz"
             panic!("expected a manual action");
         };
         assert!(command.contains("cargo install"));
+    }
+
+    #[test]
+    fn a_cargo_binary_in_an_unwritable_directory_still_gets_the_cargo_command() {
+        // Both the cargo-bin branch and the unwritable-dir branch match this
+        // input, so it is the only shape that can pin their order.
+        let UpdateAction::Manual { command } = decide_action(
+            "v0.3.0",
+            "linux",
+            "x86_64",
+            Path::new("/home/u/.cargo/bin/gitgraph-tui"),
+            None,
+            Some(Path::new("/home/u")),
+            false,
+        ) else {
+            panic!("expected a manual action");
+        };
+        assert!(
+            command.contains("cargo install"),
+            "cargo detection must win over the unwritable-dir branch, got: {command}"
+        );
+        assert!(!command.contains("install.sh"));
     }
 
     #[test]
