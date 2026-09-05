@@ -570,3 +570,46 @@ fn a_status_message_still_takes_the_whole_help_line_when_an_update_is_pending() 
     assert!(last.contains("reloaded"));
     assert!(!last.contains("u:update"));
 }
+
+#[test]
+fn the_help_line_tells_the_three_update_outcomes_apart() {
+    // The popup can be dismissed with esc while the install runs, so the help
+    // line is where the outcome has to surface. Showing "u:update" after a
+    // failure would look identical to "a new version exists".
+    let f = merge_fixture();
+
+    let mut app = app_of(&f);
+    app.update = UpdateState::Available(UpdateInfo {
+        current: "0.2.1".to_string(),
+        latest: "v0.3.0".to_string(),
+        url: "https://example.com".to_string(),
+        action: UpdateAction::SelfUpdate,
+    });
+    let pending = render_app(&mut app, 100, 16).last().unwrap().clone();
+    assert!(pending.contains("u:update"));
+    assert!(pending.contains("q:quit"), "quit must stay visible");
+
+    let mut app = app_of(&f);
+    app.update = UpdateState::Done {
+        latest: "v0.3.0".to_string(),
+    };
+    let done = render_app(&mut app, 100, 16).last().unwrap().clone();
+    assert!(
+        done.contains("u:restart"),
+        "a finished update must not still say update"
+    );
+    assert!(!done.contains("u:update"));
+    assert!(done.contains("q:quit"));
+
+    let mut app = app_of(&f);
+    app.update = UpdateState::Failed {
+        message: "checksum mismatch".to_string(),
+    };
+    let failed = render_app(&mut app, 100, 16).last().unwrap().clone();
+    assert!(
+        failed.contains("u:failed"),
+        "a failed update must be distinguishable"
+    );
+    assert!(!failed.contains("u:update"));
+    assert!(failed.contains("q:quit"));
+}

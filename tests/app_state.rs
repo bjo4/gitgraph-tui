@@ -738,4 +738,23 @@ mod update_ui {
         };
         assert!(message.contains("checksum mismatch"));
     }
+
+    #[test]
+    fn an_install_thread_that_dies_without_reporting_does_not_hang_the_popup() {
+        // Dropping the sender without a final message is what a panicked
+        // install thread looks like from here.
+        let (_f, mut app) = linear_app(2, 300);
+        let (tx, rx) = std::sync::mpsc::channel::<UpdateMessage>();
+        app.attach_update(rx);
+        app.apply_update_message(UpdateMessage::Step(InstallStep::Downloading));
+        drop(tx);
+        app.on_tick();
+        let UpdateState::Failed { message } = &app.update else {
+            panic!(
+                "expected the stalled install to surface as a failure, got {:?}",
+                app.update
+            );
+        };
+        assert!(message.contains("stopped unexpectedly"));
+    }
 }

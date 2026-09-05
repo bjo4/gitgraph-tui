@@ -412,6 +412,13 @@ impl App {
         }
     }
 
+    /// Start the real self-update.
+    ///
+    /// DANGER: this downloads a release asset and renames it over
+    /// `current_exe()`. In a test process that is the test binary itself, so no
+    /// test may ever send `y` while the state is `Available { action:
+    /// SelfUpdate }` — the existing tests build that state and stop short of
+    /// pressing the key on purpose.
     fn start_update_install(&mut self) {
         let UpdateState::Available(info) = &self.update else {
             return;
@@ -447,6 +454,13 @@ impl App {
                     // A check that found nothing closes its channel silently.
                     if self.update == UpdateState::Checking {
                         self.update = UpdateState::Idle;
+                    }
+                    // An install thread that died without reporting would
+                    // otherwise leave the popup stuck on "downloading…".
+                    if matches!(self.update, UpdateState::Installing(_)) {
+                        self.update = UpdateState::Failed {
+                            message: "the update stopped unexpectedly".to_string(),
+                        };
                     }
                     break;
                 }
