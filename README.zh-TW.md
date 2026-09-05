@@ -53,7 +53,7 @@ curl -fsSL https://raw.githubusercontent.com/bjo4/gitgraph-tui/main/install.sh |
 安裝到 `~/.local/bin`。
 
 - 指定安裝目錄：`GITGRAPH_INSTALL_DIR=/usr/local/bin curl ... | sh`
-- 指定版本：`GITGRAPH_VERSION=v0.3.0 curl ... | sh`
+- 指定版本：`GITGRAPH_VERSION=v0.4.0 curl ... | sh`
 - 你的平台沒有預編譯檔？腳本會自動改用 `cargo install`
   從原始碼建置（需要 [Rust](https://rustup.rs)）。
 
