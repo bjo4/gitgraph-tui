@@ -628,3 +628,114 @@ fn zero_chunk_size_still_terminates() {
     assert!(app.all_loaded());
     assert_eq!(app.selected, app.display_len() - 1);
 }
+
+mod update_ui {
+    use super::*;
+    use gitgraph_tui::update::{InstallStep, UpdateAction, UpdateInfo, UpdateMessage, UpdateState};
+
+    fn available_info() -> UpdateInfo {
+        UpdateInfo {
+            current: "0.2.1".to_string(),
+            latest: "v0.3.0".to_string(),
+            url: "https://github.com/bjo4/gitgraph-tui/releases/tag/v0.3.0".to_string(),
+            action: UpdateAction::SelfUpdate,
+        }
+    }
+
+    #[test]
+    fn u_opens_the_update_popup_when_an_update_is_available() {
+        let (_f, mut app) = linear_app(2, 300);
+        app.update = UpdateState::Available(available_info());
+        app.handle_key(ch('u'));
+        assert_eq!(app.mode, Mode::Update);
+    }
+
+    #[test]
+    fn u_does_nothing_while_the_state_is_idle() {
+        let (_f, mut app) = linear_app(2, 300);
+        app.handle_key(ch('u'));
+        assert_eq!(app.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn esc_n_and_q_all_close_the_update_popup_without_quitting() {
+        for closing in [KeyCode::Esc, KeyCode::Char('n'), KeyCode::Char('q')] {
+            let (_f, mut app) = linear_app(2, 300);
+            app.update = UpdateState::Available(available_info());
+            app.handle_key(ch('u'));
+            assert_eq!(app.mode, Mode::Update, "{closing:?} setup");
+            app.handle_key(key(closing));
+            assert_eq!(app.mode, Mode::Normal, "{closing:?} must close the popup");
+            assert!(!app.should_quit, "{closing:?} must not quit the app");
+        }
+    }
+
+    #[test]
+    fn a_manual_action_does_not_start_an_install_on_y() {
+        // No prebuilt asset for this platform, so `y` must be inert rather
+        // than kick off an update that is guaranteed to fail.
+        let (_f, mut app) = linear_app(2, 300);
+        app.update = UpdateState::Available(UpdateInfo {
+            action: UpdateAction::Manual {
+                command: "cargo install --git https://github.com/bjo4/gitgraph-tui".to_string(),
+            },
+            ..available_info()
+        });
+        app.handle_key(ch('u'));
+        app.handle_key(ch('y'));
+        assert!(matches!(app.update, UpdateState::Available(_)));
+        assert_eq!(app.mode, Mode::Update);
+    }
+
+    #[test]
+    fn a_version_already_seen_does_not_steal_focus() {
+        let (_f, mut app) = linear_app(2, 300);
+        app.apply_update_message(UpdateMessage::Available {
+            info: available_info(),
+            already_prompted: true,
+        });
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(matches!(app.update, UpdateState::Available(_)));
+    }
+
+    #[test]
+    fn an_update_found_mid_search_never_steals_the_keyboard() {
+        let (_f, mut app) = linear_app(2, 300);
+        app.handle_key(ch('/'));
+        assert_eq!(app.mode, Mode::Search);
+        app.apply_update_message(UpdateMessage::Available {
+            info: available_info(),
+            already_prompted: false,
+        });
+        assert_eq!(app.mode, Mode::Search, "typing must not be interrupted");
+        assert!(matches!(app.update, UpdateState::Available(_)));
+    }
+
+    #[test]
+    fn install_progress_and_completion_land_in_the_state() {
+        let (_f, mut app) = linear_app(2, 300);
+        app.apply_update_message(UpdateMessage::Step(InstallStep::Verifying));
+        assert_eq!(app.update, UpdateState::Installing(InstallStep::Verifying));
+        app.apply_update_message(UpdateMessage::Done {
+            latest: "v0.3.0".to_string(),
+        });
+        assert_eq!(
+            app.update,
+            UpdateState::Done {
+                latest: "v0.3.0".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn an_install_failure_is_kept_and_shown_not_swallowed() {
+        let (_f, mut app) = linear_app(2, 300);
+        app.apply_update_message(UpdateMessage::Failed {
+            message: "checksum mismatch".to_string(),
+        });
+        let UpdateState::Failed { message } = &app.update else {
+            panic!("expected a failed state");
+        };
+        assert!(message.contains("checksum mismatch"));
+    }
+}

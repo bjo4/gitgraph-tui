@@ -73,6 +73,7 @@ fn render_help(frame: &mut Frame, area: Rect, app: &App) {
         Mode::Diff => " j/k:scroll  g/G:top/bottom  esc:back".to_string(),
         Mode::BranchFilter => " j/k:choose  enter:apply  esc:close".to_string(),
         Mode::BranchChanges => " j/k:move  tab:focus  g/G:top/bottom  esc:back".to_string(),
+        Mode::Update => " y:update  n/esc:close".to_string(),
         Mode::Normal if !app.status.is_empty() => format!(" {}", app.status),
         Mode::Normal => {
             " j/k:move g/G:top/bot tab:focus enter:diff /:search n/N:next b:branches c:changes r:reload q:quit"
