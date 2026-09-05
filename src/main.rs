@@ -11,19 +11,30 @@ use ratatui::DefaultTerminal;
 struct Cli {
     /// Path to a git repository (defaults to the current directory)
     path: Option<std::path::PathBuf>,
+
+    /// Do not check GitHub for a newer release on startup
+    #[arg(long)]
+    no_update_check: bool,
 }
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let path = cli.path.unwrap_or_else(|| ".".into());
     // Fail before touching the terminal so the error stays readable.
-    let app = match GitRepo::discover(&path).and_then(App::new) {
+    let mut app = match GitRepo::discover(&path).and_then(App::new) {
         Ok(app) => app,
         Err(e) => {
             eprintln!("gitgraph-tui: {e:#}");
             return ExitCode::FAILURE;
         }
     };
+    // Injected here rather than inside App::new so the integration tests, which
+    // build apps through App::new_at, can never reach the network.
+    if !gitgraph_tui::update::is_disabled(cli.no_update_check)
+        && let Some(rx) = gitgraph_tui::update::spawn_check()
+    {
+        app.attach_update(rx);
+    }
     let terminal = ratatui::init(); // installs a panic hook that restores the terminal
     let result = run(terminal, app);
     ratatui::restore();
