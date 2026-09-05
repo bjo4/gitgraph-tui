@@ -283,14 +283,7 @@ fn install_into(
     let sums = download(&format!("{url}.sha256"), 4096)?;
 
     on_step(InstallStep::Verifying);
-    let expected = parse_sha256_file(&String::from_utf8_lossy(&sums))
-        .ok_or_else(|| anyhow::anyhow!("the release is missing a usable .sha256 file"))?;
-    let actual = sha256_hex(&archive);
-    if actual != expected {
-        // Never retry and never degrade: a mismatch means corrupted or
-        // tampered, and both deserve the same hard stop.
-        anyhow::bail!("checksum mismatch — aborting (expected {expected}, got {actual})");
-    }
+    verify_checksum(&archive, &String::from_utf8_lossy(&sums))?;
 
     on_step(InstallStep::Extracting);
     let staged = stage.join(BINARY_NAME);
@@ -299,6 +292,23 @@ fn install_into(
 
     on_step(InstallStep::Replacing);
     atomic_replace(&staged, exe).with_context(|| format!("replacing {}", exe.display()))?;
+    Ok(())
+}
+
+/// Compare a downloaded archive against the digest published beside it.
+///
+/// Split out of `install_into` so the integrity check — the only control
+/// between a tampered download and a replaced binary — can be tested without
+/// touching the network.
+fn verify_checksum(archive: &[u8], sums_text: &str) -> anyhow::Result<()> {
+    let expected = parse_sha256_file(sums_text)
+        .ok_or_else(|| anyhow::anyhow!("the release is missing a usable .sha256 file"))?;
+    let actual = sha256_hex(archive);
+    if actual != expected {
+        // Never retry and never degrade: a mismatch means corrupted or
+        // tampered, and both deserve the same hard stop.
+        anyhow::bail!("checksum mismatch — aborting (expected {expected}, got {actual})");
+    }
     Ok(())
 }
 
@@ -684,5 +694,48 @@ gitgraph-tui-v0.3.0-x86_64-apple-darwin.tar.gz"
         let dir = tempfile::tempdir().unwrap();
         let missing = dir.path().join("not-there");
         assert!(verify_new_binary(&missing, "v0.3.0").is_err());
+    }
+
+    #[test]
+    fn a_binary_that_exits_non_zero_is_rejected() {
+        // Prints the *right* version and then fails, so only the exit-status
+        // check can reject it. Distinct from "cannot run at all".
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let dir = tempfile::tempdir().unwrap();
+            let fake = dir.path().join("fake");
+            std::fs::write(&fake, "#!/bin/sh\necho 'gitgraph-tui 0.3.0'\nexit 1\n").unwrap();
+            std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+            assert!(verify_new_binary(&fake, "v0.3.0").is_err());
+        }
+    }
+
+    #[test]
+    fn a_checksum_matching_the_archive_passes() {
+        let archive = b"pretend this is a tarball";
+        let sums = format!("{}  asset.tar.gz\n", sha256_hex(archive));
+        assert!(verify_checksum(archive, &sums).is_ok());
+    }
+
+    #[test]
+    fn a_single_flipped_byte_fails_the_checksum() {
+        let archive = b"pretend this is a tarball";
+        let sums = format!("{}  asset.tar.gz\n", sha256_hex(archive));
+        let mut tampered = archive.to_vec();
+        tampered[0] ^= 0x01;
+        let err = verify_checksum(&tampered, &sums).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("checksum mismatch"),
+            "got: {err:#}"
+        );
+    }
+
+    #[test]
+    fn an_unusable_checksum_file_is_refused_rather_than_skipped() {
+        // A missing or malformed .sha256 must abort the update, never wave it
+        // through — that would silently disable the integrity check.
+        assert!(verify_checksum(b"anything", "").is_err());
+        assert!(verify_checksum(b"anything", "not-a-digest  asset.tar.gz").is_err());
     }
 }
