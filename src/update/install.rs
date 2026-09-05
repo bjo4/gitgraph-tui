@@ -246,7 +246,10 @@ mod tests {
         let dest = nested.join("out");
         extract_binary(&gz, &dest).unwrap();
 
-        assert_eq!(std::fs::read(&dest).unwrap(), b"legit");
+        // Security property first: this is what the test is named after, and
+        // ordering it ahead of the happy-path check means a regression that
+        // escapes fails HERE, with a message that says so, rather than
+        // tripping over a missing `dest` further down.
         assert!(
             !escape_target.exists(),
             "the `../../evil` entry escaped to {}",
@@ -262,6 +265,8 @@ mod tests {
             1,
             "extraction wrote something other than the binary: {written:?}"
         );
+
+        assert_eq!(std::fs::read(&dest).unwrap(), b"legit");
     }
 
     #[test]
