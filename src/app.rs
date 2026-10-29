@@ -2,6 +2,7 @@
 //! the UI layer only reads this struct.
 use std::collections::{BTreeSet, HashMap};
 use std::num::NonZeroUsize;
+use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
@@ -13,7 +14,7 @@ use crate::git::GitRepo;
 use crate::git::types::{
     BranchChanges, CommitId, CommitInfo, DiffLine, FileChange, RefInfo, RefKind,
 };
-use crate::git::watch::Fingerprint;
+use crate::git::watch::{Fingerprint, WorktreeStamp};
 use crate::graph::{GraphRow, LayoutEngine};
 use crate::update::{InstallStep, UpdateAction, UpdateMessage, UpdateState};
 
@@ -97,7 +98,8 @@ struct ReloadData {
     commits: Vec<CommitInfo>,
     rows: Vec<GraphRow>,
     engine: LayoutEngine,
-    uncommitted: Vec<FileChange>,
+    uncommitted: Rc<[FileChange]>,
+    worktree_stamp: Option<WorktreeStamp>,
     branch_filter: Option<RefInfo>,
     dropped_filter: Option<String>,
 }
@@ -113,7 +115,8 @@ pub struct App {
     pub rows: Vec<GraphRow>,
     engine: LayoutEngine,
     /// Uncommitted worktree changes; non-empty adds a synthetic row 0.
-    pub uncommitted: Vec<FileChange>,
+    /// Shared so per-frame reads never copy the list.
+    pub uncommitted: Rc<[FileChange]>,
     /// Selected display row (0 = uncommitted row when present).
     pub selected: usize,
     pub file_selected: usize,
@@ -127,7 +130,10 @@ pub struct App {
     pub filter_choices: Vec<Option<RefInfo>>,
     pub filter_selected: usize,
     pub list_state: ListState,
-    pub detail_cache: LruCache<CommitId, Vec<FileChange>>,
+    pub detail_cache: LruCache<CommitId, Rc<[FileChange]>>,
+    /// The commit whose file list last failed to load, with the error. Keeps
+    /// the renderer (which asks every frame) from re-running the failing diff.
+    detail_failure: Option<(CommitId, String)>,
     pub chunk_size: usize,
     /// Load more when selection comes within this margin of the loaded end.
     pub load_margin: usize,
@@ -144,6 +150,9 @@ pub struct App {
     /// A fingerprint whose soft-reload failed. Suppresses retrying that exact
     /// state every tick, while still retrying as soon as git moves again.
     failed_fp: Option<Fingerprint>,
+    /// Stamp of the worktree state `uncommitted` was computed from; a poll
+    /// that sees the same stamp skips the full diff. None = unknown.
+    worktree_stamp: Option<WorktreeStamp>,
     /// Idle ticks accrued since the last worktree-status poll.
     worktree_ticks: u32,
     /// Idle ticks accrued since the last `.git` fingerprint scan.
@@ -171,7 +180,7 @@ impl App {
             commits: Vec::new(),
             rows: Vec::new(),
             engine: LayoutEngine::new(),
-            uncommitted: Vec::new(),
+            uncommitted: Rc::from([]),
             selected: 0,
             file_selected: 0,
             focus: Focus::Commits,
@@ -184,6 +193,7 @@ impl App {
             filter_selected: 0,
             list_state: ListState::default(),
             detail_cache: LruCache::new(NonZeroUsize::new(DETAIL_CACHE_SIZE).unwrap()),
+            detail_failure: None,
             chunk_size: DEFAULT_CHUNK,
             load_margin: 50,
             now,
@@ -193,6 +203,7 @@ impl App {
             should_quit: false,
             git_fp: Fingerprint::default(),
             failed_fp: None,
+            worktree_stamp: None,
             worktree_ticks: 0,
             git_ticks: 0,
         };
@@ -223,13 +234,15 @@ impl App {
     /// dropped (falling back to all branches) so auto-refresh can't wedge on a
     /// deleted branch.
     fn reload_data(&mut self) -> Result<()> {
-        let mut data = self.prepare_reload()?;
+        let mut data = self.prepare_reload(false)?;
         Self::load_staged_chunk(&self.repo, self.chunk_size, &mut data)?;
         self.apply_reload(data);
         Ok(())
     }
 
-    fn prepare_reload(&self) -> Result<ReloadData> {
+    /// `reuse_worktree`: keep the current uncommitted list when the worktree
+    /// stamp is unchanged (auto-refresh); a hard reload always re-diffs.
+    fn prepare_reload(&self, reuse_worktree: bool) -> Result<ReloadData> {
         let refs = self.repo.refs()?;
         let mut branch_filter = self.branch_filter.clone();
         let dropped_filter = branch_filter
@@ -241,7 +254,15 @@ impl App {
         }
         let filter = branch_filter.as_ref().map(|r| r.refname.as_str());
         let oids = self.repo.commit_ids(filter)?;
-        let uncommitted = self.repo.worktree_status()?;
+        // Stamp first: an edit racing the diff below then shows up as a
+        // stamp change on the next poll instead of being masked.
+        let worktree_stamp = self.repo.worktree_stamp().ok();
+        let uncommitted = match &worktree_stamp {
+            Some(stamp) if reuse_worktree && self.worktree_stamp.as_ref() == Some(stamp) => {
+                Rc::clone(&self.uncommitted)
+            }
+            _ => self.repo.worktree_status()?.into(),
+        };
         Ok(ReloadData {
             ref_map: GitRepo::ref_map(&refs),
             refs,
@@ -250,6 +271,7 @@ impl App {
             rows: Vec::new(),
             engine: LayoutEngine::new(),
             uncommitted,
+            worktree_stamp,
             branch_filter,
             dropped_filter,
         })
@@ -275,8 +297,10 @@ impl App {
         self.rows = data.rows;
         self.engine = data.engine;
         self.uncommitted = data.uncommitted;
+        self.worktree_stamp = data.worktree_stamp;
         self.branch_filter = data.branch_filter;
         self.detail_cache.clear();
+        self.detail_failure = None;
         if let Some(name) = data.dropped_filter {
             self.status = format!("branch '{name}' is gone — showing all");
         }
@@ -291,7 +315,7 @@ impl App {
         let prev = self.selected;
         let query = self.search.query.clone();
 
-        let mut data = self.prepare_reload()?;
+        let mut data = self.prepare_reload(true)?;
 
         if let Some(pos) = anchor
             .as_deref()
@@ -344,34 +368,36 @@ impl App {
 
     /// Called once per idle tick from the main loop. The `.git` fingerprint
     /// and heavier worktree diff are independently throttled; a changed Git
-    /// fingerprint performs a full soft-reload.
-    pub fn on_tick(&mut self) {
-        self.drain_update_messages();
+    /// fingerprint performs a full soft-reload. Returns whether anything the
+    /// UI shows may have changed, so the caller can skip idle redraws.
+    pub fn on_tick(&mut self) -> bool {
+        let mut changed = self.drain_update_messages();
         self.worktree_ticks += 1;
         if self.worktree_ticks >= WORKTREE_POLL_TICKS {
             self.worktree_ticks = 0;
-            self.refresh_worktree();
+            changed |= self.refresh_worktree();
         }
         self.git_ticks += 1;
         if self.git_ticks < GIT_POLL_TICKS {
-            return;
+            return changed;
         }
         self.git_ticks = 0;
         let fp = Fingerprint::snapshot(self.repo.git_dir(), self.repo.common_dir());
         if fp == self.git_fp {
-            return;
+            return changed;
         }
         // `.git` changed. If this exact state already failed to load, wait for
         // git to move again rather than spinning on it every tick — but keep
         // `git_fp` at the last good state so a transient failure self-heals the
         // moment a loadable state appears.
         if self.failed_fp.as_ref() == Some(&fp) {
-            return;
+            return changed;
         }
         if let Err(e) = self.soft_reload() {
             self.status = format!("auto-refresh failed: {e:#}");
             self.failed_fp = Some(fp);
         }
+        true
     }
 
     /// Hand the app the receiving end of a background update thread.
@@ -442,14 +468,19 @@ impl App {
 
     /// Non-blocking drain of the background update channel. Must stay
     /// `try_recv` — the draw loop ticks every 250 ms and cannot block.
-    fn drain_update_messages(&mut self) {
-        let Some(rx) = &self.update_rx else { return };
+    /// Returns whether any update state changed.
+    fn drain_update_messages(&mut self) -> bool {
+        let Some(rx) = &self.update_rx else {
+            return false;
+        };
         let mut messages = Vec::new();
+        let mut disconnected = false;
         loop {
             match rx.try_recv() {
                 Ok(message) => messages.push(message),
                 Err(std::sync::mpsc::TryRecvError::Empty) => break,
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    disconnected = true;
                     self.update_rx = None;
                     // A check that found nothing closes its channel silently.
                     if self.update == UpdateState::Checking {
@@ -466,9 +497,11 @@ impl App {
                 }
             }
         }
+        let changed = disconnected || !messages.is_empty();
         for message in messages {
             self.apply_update_message(message);
         }
+        changed
     }
 
     fn refresh_fingerprint(&mut self) {
@@ -480,20 +513,28 @@ impl App {
 
     /// Re-diff the worktree only. Catches unsaved edits that don't touch
     /// `.git`; fixes selection for the synthetic uncommitted row appearing or
-    /// disappearing so the same commit stays under the cursor.
-    fn refresh_worktree(&mut self) {
+    /// disappearing so the same commit stays under the cursor. The full diff
+    /// is skipped while the cheap worktree stamp is unchanged. Returns whether
+    /// the visible state changed.
+    fn refresh_worktree(&mut self) -> bool {
+        // Stamp before diffing, so an edit racing the diff is caught next poll.
+        let stamp = self.repo.worktree_stamp().ok();
+        if stamp.is_some() && stamp == self.worktree_stamp {
+            return false;
+        }
         let fresh = match self.repo.worktree_status() {
             Ok(fresh) => fresh,
             Err(e) => {
                 self.status = format!("worktree refresh failed: {e:#}");
-                return;
+                return true;
             }
         };
-        if fresh == self.uncommitted {
-            return;
+        self.worktree_stamp = stamp;
+        if *fresh == *self.uncommitted {
+            return false;
         }
         let had = self.uncommitted_offset();
-        self.uncommitted = fresh;
+        self.uncommitted = fresh.into();
         match (had, self.uncommitted_offset()) {
             (0, 1) => self.selected += 1, // row 0 inserted: shift to stay put
             (1, 0) => self.selected = self.selected.saturating_sub(1),
@@ -504,6 +545,7 @@ impl App {
             .file_selected
             .min(self.current_files().len().saturating_sub(1));
         self.sync_list_state();
+        true
     }
 
     pub fn uncommitted_offset(&self) -> usize {
@@ -516,6 +558,12 @@ impl App {
 
     pub fn total_len(&self) -> usize {
         self.uncommitted_offset() + self.oids.len()
+    }
+
+    /// Width in cells of the widest loaded graph row; tracked by the layout
+    /// engine so the renderer never rescans every row.
+    pub fn graph_cells(&self) -> usize {
+        self.engine.max_cells()
     }
 
     pub fn all_loaded(&self) -> bool {
@@ -641,23 +689,35 @@ impl App {
     }
 
     /// Changed files for the selected row (uncommitted row or commit),
-    /// LRU-cached per commit.
-    pub fn current_files(&mut self) -> Vec<FileChange> {
+    /// LRU-cached per commit. Called every frame, so it hands out a shared
+    /// list and never retries a commit whose diff just failed.
+    pub fn current_files(&mut self) -> Rc<[FileChange]> {
         let Some(commit) = self.selected_commit() else {
-            return self.uncommitted.clone();
+            return Rc::clone(&self.uncommitted);
         };
         let id = commit.id.clone();
         if let Some(files) = self.detail_cache.get(&id) {
-            return files.clone();
+            return Rc::clone(files);
+        }
+        if let Some((failed, message)) = &self.detail_failure
+            && *failed == id
+        {
+            if self.status.is_empty() {
+                self.status = message.clone();
+            }
+            return Rc::from([]);
         }
         match self.repo.commit_files(&id) {
             Ok(files) => {
-                self.detail_cache.put(id, files.clone());
+                let files: Rc<[FileChange]> = files.into();
+                self.detail_cache.put(id, Rc::clone(&files));
                 files
             }
             Err(e) => {
-                self.status = format!("details failed: {e:#}");
-                Vec::new()
+                let message = format!("details failed: {e:#}");
+                self.status = message.clone();
+                self.detail_failure = Some((id, message));
+                Rc::from([])
             }
         }
     }

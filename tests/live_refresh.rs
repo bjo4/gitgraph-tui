@@ -194,3 +194,38 @@ fn on_tick_is_a_no_op_while_git_is_unchanged() {
     assert_eq!(app.total_len(), total);
     assert!(app.status.is_empty(), "status was: {:?}", app.status);
 }
+
+#[test]
+fn re_editing_a_dirty_file_refreshes_its_line_counts() {
+    let (f, mut app, _oids) = linear_app(2);
+    f.write_file("a.txt", "x\n");
+    for _ in 0..WORKTREE_POLL_TICKS {
+        app.on_tick();
+    }
+    app.handle_key(ch('g')); // the uncommitted row
+    assert_eq!(app.current_files()[0].additions, 1);
+
+    // Same path, same "modified" status — only the content moved. The cheap
+    // worktree gate must still notice and re-diff.
+    f.write_file("a.txt", "x\ny\nz\n");
+    for _ in 0..WORKTREE_POLL_TICKS {
+        app.on_tick();
+    }
+    assert_eq!(app.current_files()[0].additions, 3);
+}
+
+#[test]
+fn on_tick_reports_whether_a_redraw_is_needed() {
+    let (f, mut app, _oids) = linear_app(2);
+    for _ in 0..(WORKTREE_POLL_TICKS * 2) {
+        assert!(!app.on_tick(), "a clean, unchanged repo needs no redraw");
+    }
+
+    f.write_file("untracked.txt", "hello\n");
+    let redraws: Vec<bool> = (0..WORKTREE_POLL_TICKS).map(|_| app.on_tick()).collect();
+    assert!(
+        redraws.contains(&true),
+        "the poll that picks up the edit must ask for a redraw"
+    );
+    assert_eq!(app.uncommitted_offset(), 1);
+}

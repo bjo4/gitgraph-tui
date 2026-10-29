@@ -65,12 +65,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
 }
 
 fn graph_width(app: &App) -> usize {
-    app.rows
-        .iter()
-        .map(|r| r.cells.len())
-        .max()
-        .unwrap_or(2)
-        .clamp(2, MAX_GRAPH_W)
+    app.graph_cells().clamp(2, MAX_GRAPH_W)
 }
 
 fn row_line(app: &App, i: usize, graph_w: usize, text_w: usize) -> Line<'static> {
@@ -89,12 +84,21 @@ fn row_line(app: &App, i: usize, graph_w: usize, text_w: usize) -> Line<'static>
     let idx = i - off;
     let commit = &app.commits[idx];
     let row = &app.rows[idx];
-    let mut spans: Vec<Span> = row
-        .cells
-        .iter()
-        .take(graph_w)
-        .map(|c| Span::styled(c.glyph.to_string(), Style::new().fg(lane_color(c.color))))
-        .collect();
+    // One span per run of same-colored cells, not one per cell.
+    let mut spans: Vec<Span> = Vec::new();
+    let mut run = String::new();
+    let mut run_color = 0;
+    for c in row.cells.iter().take(graph_w) {
+        if c.color != run_color && !run.is_empty() {
+            let text = std::mem::take(&mut run);
+            spans.push(Span::styled(text, Style::new().fg(lane_color(run_color))));
+        }
+        run_color = c.color;
+        run.push(c.glyph);
+    }
+    if !run.is_empty() {
+        spans.push(Span::styled(run, Style::new().fg(lane_color(run_color))));
+    }
     if row.cells.len() < graph_w {
         spans.push(Span::raw(" ".repeat(graph_w - row.cells.len())));
     }
