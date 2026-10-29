@@ -3,10 +3,11 @@ use std::cell::RefCell;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use git2::{Delta, Diff, DiffOptions, Oid};
+use git2::{Delta, Diff, DiffOptions, Oid, StatusOptions};
 
 use super::repo::GitRepo;
 use super::types::{BranchChanges, ChangeKind, CommitId, DiffLine, FileChange, RefInfo};
+use super::watch::{WorktreeStamp, stat};
 
 impl GitRepo {
     /// Files changed by a commit, diffed against its first parent
@@ -22,6 +23,40 @@ impl GitRepo {
         let mut diff = self.commit_diff(id)?;
         diff.find_similar(None)?;
         collect_diff_lines(&diff, Some(path.as_ref()))
+    }
+
+    /// Stat-level snapshot of the uncommitted state, far cheaper than
+    /// [`worktree_status`](Self::worktree_status): no rename detection and no
+    /// content diff, only status flags. Equal stamps mean the worktree status
+    /// would come out the same, so callers can skip recomputing it.
+    pub fn worktree_stamp(&self) -> Result<WorktreeStamp> {
+        let Some(workdir) = self.inner.workdir() else {
+            return Ok(WorktreeStamp::default());
+        };
+        let head_tree = self
+            .inner
+            .head()
+            .ok()
+            .and_then(|h| h.peel_to_tree().ok())
+            .map(|t| t.id().to_string());
+        let mut opts = StatusOptions::new();
+        opts.include_untracked(true)
+            .recurse_untracked_dirs(true)
+            .include_ignored(false);
+        let statuses = self.inner.statuses(Some(&mut opts))?;
+        let entries = statuses
+            .iter()
+            .map(|e| {
+                let path = String::from_utf8_lossy(e.path_bytes()).into_owned();
+                let on_disk = stat(&workdir.join(&path));
+                (path, e.status().bits(), on_disk)
+            })
+            .collect();
+        Ok(WorktreeStamp {
+            head_tree,
+            index: stat(&self.inner.path().join("index")),
+            entries,
+        })
     }
 
     /// Combined staged + unstaged + untracked changes (HEAD tree vs

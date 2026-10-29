@@ -30,6 +30,9 @@ struct Lane {
 pub struct LayoutEngine {
     slots: Vec<Option<Lane>>,
     next_color: usize,
+    /// Widest row (in cells) produced since the last reset, so the UI can
+    /// size the graph column without rescanning every row each frame.
+    max_cells: usize,
 }
 
 impl LayoutEngine {
@@ -40,6 +43,12 @@ impl LayoutEngine {
     pub fn reset(&mut self) {
         self.slots.clear();
         self.next_color = 0;
+        self.max_cells = 0;
+    }
+
+    /// Cell count of the widest row processed so far (0 before any row).
+    pub fn max_cells(&self) -> usize {
+        self.max_cells
     }
 
     /// Process the next chunk of commits (topological order), continuing
@@ -92,6 +101,7 @@ impl LayoutEngine {
             .collect();
         self.trim();
         let cells = render_cells(lane, color, &closes, &opens, &pass);
+        self.max_cells = self.max_cells.max(cells.len());
         GraphRow { lane, color, cells }
     }
 
@@ -311,6 +321,18 @@ mod tests {
         let rows = e.process(&tips);
         assert_eq!(rows[8].color, 8 % PALETTE_SIZE);
         assert_eq!(rows[8].lane, 8);
+    }
+
+    #[test]
+    fn max_cells_tracks_the_widest_row_across_chunks() {
+        let mut e = LayoutEngine::new();
+        assert_eq!(e.max_cells(), 0);
+        let mut rows = e.process(&[c("o", &["a", "b", "x"]), c("a", &[])]);
+        rows.extend(e.process(&[c("b", &[]), c("x", &[])]));
+        let widest = rows.iter().map(|r| r.cells.len()).max().unwrap();
+        assert_eq!(e.max_cells(), widest);
+        e.reset();
+        assert_eq!(e.max_cells(), 0);
     }
 
     #[test]

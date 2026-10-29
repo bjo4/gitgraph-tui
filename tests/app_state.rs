@@ -161,6 +161,10 @@ fn current_files_returns_commit_changes_and_caches_them() {
     assert_eq!(files[0].kind, ChangeKind::Modified); // commit 2 rewrites a.txt
     let id = app.selected_commit().unwrap().id.clone();
     assert!(app.detail_cache.contains(&id), "result must be cached");
+    assert!(
+        std::rc::Rc::ptr_eq(&files, &app.current_files()),
+        "repeat calls (one per frame) share the cached list instead of copying it"
+    );
 }
 
 #[test]

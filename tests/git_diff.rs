@@ -350,3 +350,65 @@ fn non_utf8_worktree_path_round_trips_into_the_diff() {
             .any(|line| line.origin == '+' && line.content == "content")
     );
 }
+
+/// Committed `a.txt` on `main`, HEAD attached, clean worktree.
+fn clean_repo() -> (Fixture, GitRepo) {
+    let f = Fixture::new();
+    let c1 = f.commit("base", &[("a.txt", "1\n")], &[], &[], 1_000);
+    f.branch("main", c1);
+    f.set_head("refs/heads/main");
+    let repo = GitRepo::discover(f.path()).unwrap();
+    (f, repo)
+}
+
+#[test]
+fn worktree_stamp_is_stable_while_nothing_changes() {
+    let (f, repo) = clean_repo();
+    f.write_file("a.txt", "dirty\n");
+    f.write_file("new.txt", "untracked\n");
+    assert_eq!(
+        repo.worktree_stamp().unwrap(),
+        repo.worktree_stamp().unwrap()
+    );
+}
+
+#[test]
+fn worktree_stamp_changes_when_a_file_becomes_dirty() {
+    let (f, repo) = clean_repo();
+    let before = repo.worktree_stamp().unwrap();
+    f.write_file("a.txt", "changed\n");
+    assert_ne!(before, repo.worktree_stamp().unwrap());
+}
+
+#[test]
+fn worktree_stamp_changes_when_an_already_dirty_file_is_edited_again() {
+    // The status flags stay "modified"; only the file's stat moves. The stamp
+    // must still change, or the +/- counts would go stale.
+    let (f, repo) = clean_repo();
+    f.write_file("a.txt", "first edit\n");
+    let before = repo.worktree_stamp().unwrap();
+    f.write_file("a.txt", "second, longer edit\n");
+    assert_ne!(before, repo.worktree_stamp().unwrap());
+}
+
+#[test]
+fn worktree_stamp_changes_when_an_untracked_file_appears_or_grows() {
+    let (f, repo) = clean_repo();
+    let clean = repo.worktree_stamp().unwrap();
+    f.write_file("dir/new.txt", "a\n");
+    let added = repo.worktree_stamp().unwrap();
+    assert_ne!(clean, added);
+    f.write_file("dir/new.txt", "a\nb\n");
+    assert_ne!(added, repo.worktree_stamp().unwrap());
+}
+
+#[test]
+fn worktree_stamp_changes_when_a_change_is_staged() {
+    let (f, repo) = clean_repo();
+    f.write_file("a.txt", "staged\n");
+    let before = repo.worktree_stamp().unwrap();
+    let mut index = f.repo.index().unwrap();
+    index.add_path(std::path::Path::new("a.txt")).unwrap();
+    index.write().unwrap();
+    assert_ne!(before, repo.worktree_stamp().unwrap());
+}

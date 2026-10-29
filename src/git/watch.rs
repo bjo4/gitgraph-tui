@@ -4,7 +4,8 @@
 //! tells the app when to reload — no git2 walk, no extra dependency.
 //!
 //! Worktree-only edits (a file changed but no git command run) do NOT touch
-//! these paths; the app catches those with a separate periodic status poll.
+//! these paths; the app catches those with a separate periodic status poll,
+//! gated by a [`WorktreeStamp`] so the full diff only runs when something moved.
 //!
 //! A stat is (mtime, size), so a rewrite that keeps both identical is invisible
 //! — e.g. switching between two equal-length branch names on a filesystem with
@@ -17,7 +18,7 @@ use std::time::SystemTime;
 
 /// A file's (modified-time, size), or None when it does not exist — absence
 /// is itself a meaningful state (e.g. MERGE_HEAD appears only mid-merge).
-type Stat = Option<(SystemTime, u64)>;
+pub(crate) type Stat = Option<(SystemTime, u64)>;
 
 /// Ordered list of (label, stat) pairs. Equality means "no git change seen".
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -52,7 +53,20 @@ impl Fingerprint {
     }
 }
 
-fn stat(path: &Path) -> Stat {
+/// Cheap summary of the uncommitted state: the HEAD tree, the index file, and
+/// every non-clean path with its status bits and on-disk stat. Built from
+/// `git status`-style data (no content diff, no line counts), so comparing two
+/// stamps tells the app whether the expensive worktree diff needs rerunning.
+/// Like [`Fingerprint`], it is stat-based: a rewrite that keeps a dirty file's
+/// size and mtime identical goes unseen until something else moves.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WorktreeStamp {
+    pub(crate) head_tree: Option<String>,
+    pub(crate) index: Stat,
+    pub(crate) entries: Vec<(String, u32, Stat)>,
+}
+
+pub(crate) fn stat(path: &Path) -> Stat {
     let meta = fs::metadata(path).ok()?;
     Some((meta.modified().ok()?, meta.len()))
 }

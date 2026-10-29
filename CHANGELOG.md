@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- The idle worktree poll now checks a cheap status stamp first and only
+  re-diffs the worktree when something actually moved; auto-refresh after a
+  git change reuses the uncommitted list the same way. On a large, dirty
+  worktree an idle poll drops from ~165 ms to ~6 ms.
+- The screen is no longer redrawn on idle ticks that changed nothing.
+- The detail panel shares its cached file list instead of copying it every
+  frame, and a commit whose file list fails to load is not retried each frame.
+
 ## [0.4.0] - 2026-09-05
 
 ### Added
